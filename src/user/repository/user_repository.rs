@@ -37,18 +37,16 @@ impl UserRepository {
         Self { pool }
     }
 
-    pub async fn create(&self, email: &str, password: &str) -> Result<User, RepositoryError> {
+    pub async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
         let conn = self.pool.get().await?;
         let id = Uuid::new_v4();
-        let email_owned = email.to_string();
-        let password_owned = password.to_string();
 
         let inserted_user = conn
             .interact(move |conn| {
                 let new_user = NewUser {
                     id,
-                    email: email_owned.clone(),
-                    password: password_owned.clone(),
+                    email: email.clone(),
+                    password: password.clone(),
                 };
 
                 diesel::insert_into(users::table)
@@ -57,8 +55,8 @@ impl UserRepository {
 
                 Ok::<_, diesel::result::Error>(User {
                     id,
-                    email: email_owned,
-                    password: password_owned,
+                    email,
+                    password,
                 })
             })
             .await??;

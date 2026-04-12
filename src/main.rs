@@ -89,7 +89,7 @@ async fn main() {
         .unwrap();
 
     let user_repository = UserRepository::new(diesel_pool);
-    let _ = user_repository.create("hello", "password").await;
+    let _ = user_repository.create("hello".to_string(), "password".to_string()).await;
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .with_state(pool);
