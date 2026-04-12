@@ -28,6 +28,7 @@ pub enum RepositoryError {
     DieselError(#[from] diesel::result::Error),
 }
 
+#[derive(Clone)]
 pub struct UserRepository {
     pool: Pool,
 }

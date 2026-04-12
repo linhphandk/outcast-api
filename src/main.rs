@@ -38,6 +38,24 @@ struct Event {
     title: String,
 }
 
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: deadpool_postgres::Pool,
+    pub user_service: crate::user::usecase::user_service::UserService,
+}
+
+impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for crate::user::usecase::user_service::UserService {
+    fn from_ref(state: &AppState) -> Self {
+        state.user_service.clone()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Pool error: {0}")]
@@ -90,10 +108,16 @@ async fn main() {
 
     let user_repository = UserRepository::new(diesel_pool);
     let user_service = crate::user::usecase::user_service::UserService::new(user_repository);
-    let _ = user_service.create("hello".to_string(), "password".to_string()).await;
+    
+    let state = AppState {
+        pool,
+        user_service,
+    };
+    
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
-        .with_state(pool);
+        .merge(crate::user::http::user_controller::router())
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
     println!("Server running at http://{}/", &config.listen);
     println!(

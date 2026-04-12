@@ -1,5 +1,6 @@
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepository};
 
+#[derive(Clone)]
 pub struct UserService {
     repository: UserRepository,
 }
