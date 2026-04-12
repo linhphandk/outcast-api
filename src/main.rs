@@ -1,21 +1,25 @@
+pub mod schema;
+mod user;
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use axum_macros::debug_handler;
 use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
+use user::repository::user_repository::UserRepository;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 struct Config {
     listen: String,
     pg: deadpool_postgres::Config,
+    database_url: String,
 }
 
 impl Config {
@@ -75,6 +79,17 @@ async fn main() {
         .pg
         .create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)
         .unwrap();
+
+    let diesel_manager = deadpool_diesel::postgres::Manager::new(
+        &config.database_url,
+        deadpool_diesel::Runtime::Tokio1,
+    );
+    let diesel_pool = deadpool_diesel::postgres::Pool::builder(diesel_manager)
+        .build()
+        .unwrap();
+
+    let user_repository = UserRepository::new(diesel_pool);
+    let _ = user_repository.create("hello", "password").await;
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .with_state(pool);
