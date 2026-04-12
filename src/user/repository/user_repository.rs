@@ -1,9 +1,12 @@
+use async_trait::async_trait;
 use crate::schema::users;
 use deadpool_diesel::InteractError;
 use deadpool_diesel::postgres::Pool;
 use diesel::prelude::*;
+#[cfg(test)]
+use mockall::{automock, predicate::*};
 use uuid::Uuid;
-
+#[derive(Debug, PartialEq)]
 pub struct User {
     pub id: Uuid,
     pub email: String,
@@ -32,13 +35,20 @@ pub enum RepositoryError {
 pub struct UserRepository {
     pool: Pool,
 }
-
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait UserRepositoryTrait {
+    async fn create(&self, email: String, password: String) -> Result<User, RepositoryError>;
+}
 impl UserRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
+}
 
-    pub async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
+#[async_trait]
+impl UserRepositoryTrait for UserRepository {
+    async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
         let conn = self.pool.get().await?;
         let id = Uuid::new_v4();
 

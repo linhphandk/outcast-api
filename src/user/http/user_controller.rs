@@ -2,6 +2,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::po
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::user::repository::user_repository::UserRepository;
 use crate::user::usecase::user_service::UserService;
 
 #[derive(Deserialize)]
@@ -17,7 +18,7 @@ pub struct CreateUserRes {
 }
 
 pub async fn create_user(
-    State(service): State<UserService>,
+    State(service): State<UserService<UserRepository>>,
     Json(payload): Json<CreateUserReq>,
 ) -> impl IntoResponse {
     let result = service.create(payload.email, payload.password).await;
@@ -40,7 +41,7 @@ pub async fn create_user(
 
 pub fn router<S>() -> Router<S>
 where
-    UserService: axum::extract::FromRef<S>,
+    UserService<UserRepository>: axum::extract::FromRef<S>,
     S: Clone + Send + Sync + 'static,
 {
     Router::new().route("/user", post(create_user))

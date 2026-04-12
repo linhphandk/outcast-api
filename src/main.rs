@@ -41,7 +41,7 @@ struct Event {
 #[derive(Clone)]
 pub struct AppState {
     pub pool: deadpool_postgres::Pool,
-    pub user_service: crate::user::usecase::user_service::UserService,
+    pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -50,7 +50,7 @@ impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
     }
 }
 
-impl axum::extract::FromRef<AppState> for crate::user::usecase::user_service::UserService {
+impl axum::extract::FromRef<AppState> for crate::user::usecase::user_service::UserService<UserRepository> {
     fn from_ref(state: &AppState) -> Self {
         state.user_service.clone()
     }
