@@ -108,12 +108,9 @@ async fn main() {
 
     let user_repository = UserRepository::new(diesel_pool);
     let user_service = crate::user::usecase::user_service::UserService::new(user_repository);
-    
-    let state = AppState {
-        pool,
-        user_service,
-    };
-    
+
+    let state = AppState { pool, user_service };
+
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .merge(crate::user::http::user_controller::router())

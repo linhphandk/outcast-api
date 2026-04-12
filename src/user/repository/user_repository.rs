@@ -65,3 +65,78 @@ impl UserRepository {
         Ok(inserted_user)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+
+    pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+
+    async fn setup_test_db() -> (
+        testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
+        Pool,
+    ) {
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::postgres::Postgres;
+
+        let container = Postgres::default().start().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let conn_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+
+        let manager =
+            deadpool_diesel::postgres::Manager::new(conn_string, deadpool_diesel::Runtime::Tokio1);
+        let pool = deadpool_diesel::postgres::Pool::builder(manager)
+            .build()
+            .unwrap();
+
+        let conn = pool.get().await.unwrap();
+        conn.interact(|conn| conn.run_pending_migrations(MIGRATIONS).map(|_| ()))
+            .await
+            .unwrap()
+            .unwrap();
+
+        (container, pool)
+    }
+
+    #[tokio::test]
+    async fn test_containers_create_user() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let created_user = repo
+            .create("test@example.com".to_string(), "supersecret".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(created_user.email, "test@example.com");
+        assert_eq!(created_user.password, "supersecret");
+    }
+
+    #[tokio::test]
+    async fn test_containers_create_duplicate_user() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let _ = repo
+            .create(
+                "duplicate@example.com".to_string(),
+                "supersecret".to_string(),
+            )
+            .await
+            .unwrap();
+
+        let duplicate_result = repo
+            .create(
+                "duplicate@example.com".to_string(),
+                "differentpassword".to_string(),
+            )
+            .await;
+
+        assert!(
+            duplicate_result.is_err(),
+            "Expected duplicate email creation to fail!"
+        );
+    }
+}
