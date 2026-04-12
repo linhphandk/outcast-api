@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+axum = "0.8.8"
+axum-macros = "0.5.0"
+config = "0.15.22"
+deadpool-postgres = {version="0.14.1", features=["serde"]}
+dotenvy = "0.15.7"
+serde = {version="1.0.228", features=["derive"]}
+thiserror = "2.0.18"
+tokio = {version="1.51.1",features=["rt-multi-thread"]}
+tokio-postgres = {version="0.7.17",features = ["with-uuid-1"]}
+uuid = {version="1.23.0", features=["serde"]}
