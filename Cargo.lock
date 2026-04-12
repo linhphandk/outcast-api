@@ -1717,13 +1717,16 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "dotenvy",
+ "http-body-util",
  "mockall",
  "serde",
+ "serde_json",
  "testcontainers",
  "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tower",
  "uuid",
 ]
 

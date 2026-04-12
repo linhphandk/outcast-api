@@ -1,6 +1,4 @@
-use crate::user::repository::user_repository::{
-    RepositoryError, User, UserRepositoryTrait,
-};
+use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
 
 pub struct UserService<R: UserRepositoryTrait> {
     repository: R,
@@ -36,7 +34,10 @@ mod tests {
         let mut mock = MockUserRepositoryTrait::new();
 
         mock.expect_create()
-            .with(eq("test@example.com".to_string()), eq("password123".to_string()))
+            .with(
+                eq("test@example.com".to_string()),
+                eq("password123".to_string()),
+            )
             .times(1)
             .returning(|email, password| {
                 Ok(User {
@@ -62,7 +63,10 @@ mod tests {
         let mut mock = MockUserRepositoryTrait::new();
 
         mock.expect_create()
-            .with(eq("fail@example.com".to_string()), eq("password123".to_string()))
+            .with(
+                eq("fail@example.com".to_string()),
+                eq("password123".to_string()),
+            )
             .times(1)
             .returning(|_, _| {
                 Err(RepositoryError::DieselError(

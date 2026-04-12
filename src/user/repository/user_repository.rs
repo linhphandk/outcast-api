@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::schema::users;
+use async_trait::async_trait;
 use deadpool_diesel::InteractError;
 use deadpool_diesel::postgres::Pool;
 use diesel::prelude::*;
