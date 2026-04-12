@@ -89,7 +89,8 @@ async fn main() {
         .unwrap();
 
     let user_repository = UserRepository::new(diesel_pool);
-    let _ = user_repository.create("hello".to_string(), "password".to_string()).await;
+    let user_service = crate::user::usecase::user_service::UserService::new(user_repository);
+    let _ = user_service.create("hello".to_string(), "password".to_string()).await;
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .with_state(pool);
