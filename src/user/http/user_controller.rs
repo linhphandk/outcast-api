@@ -2,8 +2,9 @@ use axum::{Json, Router, extract::State, http::StatusCode, response::IntoRespons
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::user::repository::user_repository::UserRepository;
+use crate::user::repository::user_repository::{RepositoryError, UserRepository};
 use crate::user::usecase::user_service::UserService;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 
 #[derive(Deserialize)]
 pub struct CreateUserReq {
@@ -31,7 +32,13 @@ pub async fn create_user(
             };
             (StatusCode::CREATED, Json(res)).into_response()
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create user").into_response(),
+        Err(err) => match err {
+            RepositoryError::DieselError(DieselError::DatabaseError(
+                DatabaseErrorKind::UniqueViolation,
+                _,
+            )) => (StatusCode::CONFLICT, "User already exists").into_response(),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create user").into_response(),
+        },
     }
 }
 
@@ -83,7 +90,7 @@ mod tests {
 
     fn build_app(pool: deadpool_diesel::postgres::Pool) -> Router {
         let repo = UserRepository::new(pool);
-        let service = UserService::new(repo);
+        let service = UserService::new(repo, "test_pepper".to_string());
         Router::new()
             .route("/user", post(create_user))
             .with_state(service)
@@ -149,7 +156,7 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

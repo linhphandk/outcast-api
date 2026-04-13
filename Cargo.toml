@@ -7,10 +7,14 @@ edition = "2024"
 axum = "0.8.8"
 axum-macros = "0.5.0"
 async-trait = "0.1.86"
+bcrypt = "0.17.0"
 config = "0.15.22"
 deadpool-diesel = { version = "0.6.1", features = ["postgres"] }
 deadpool-postgres = {version="0.14.1", features=["serde"]}
 diesel = { version = "2.3.7", features = ["postgres", "uuid"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+sha2 = "0.10.8"
 dotenvy = "0.15.7"
 serde = {version="1.0.228", features=["derive"]}
 thiserror = "2.0.18"

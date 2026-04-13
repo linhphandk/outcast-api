@@ -20,6 +20,7 @@ struct Config {
     listen: String,
     pg: deadpool_postgres::Config,
     database_url: String,
+    password_pepper: String,
 }
 
 impl Config {
@@ -109,7 +110,10 @@ async fn main() {
         .unwrap();
 
     let user_repository = UserRepository::new(diesel_pool);
-    let user_service = crate::user::usecase::user_service::UserService::new(user_repository);
+    let user_service = crate::user::usecase::user_service::UserService::new(
+        user_repository,
+        config.password_pepper,
+    );
 
     let state = AppState { pool, user_service };
 
