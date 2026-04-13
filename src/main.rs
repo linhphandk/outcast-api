@@ -21,6 +21,7 @@ struct Config {
     pg: deadpool_postgres::Config,
     database_url: String,
     password_pepper: String,
+    jwt_secret: String,
 }
 
 impl Config {
@@ -43,6 +44,7 @@ struct Event {
 pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
+    pub jwt_secret: String,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -56,6 +58,12 @@ impl axum::extract::FromRef<AppState>
 {
     fn from_ref(state: &AppState) -> Self {
         state.user_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for String {
+    fn from_ref(state: &AppState) -> Self {
+        state.jwt_secret.clone()
     }
 }
 
@@ -115,7 +123,11 @@ async fn main() {
         config.password_pepper,
     );
 
-    let state = AppState { pool, user_service };
+    let state = AppState {
+        pool,
+        user_service,
+        jwt_secret: config.jwt_secret,
+    };
 
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))

@@ -21,13 +21,12 @@ impl<R: UserRepositoryTrait> UserService<R> {
     }
 
     pub async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
-        let hashed_password =
-            hash_password(&password, &self.pepper).map_err(|_| {
-                RepositoryError::DieselError(diesel::result::Error::DatabaseError(
-                    diesel::result::DatabaseErrorKind::Unknown,
-                    Box::new("Failed to hash password".to_string()),
-                ))
-            })?;
+        let hashed_password = hash_password(&password, &self.pepper).map_err(|_| {
+            RepositoryError::DieselError(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::Unknown,
+                Box::new("Failed to hash password".to_string()),
+            ))
+        })?;
         self.repository.create(email, hashed_password).await
     }
 }
@@ -44,10 +43,7 @@ mod tests {
         let mut mock = MockUserRepositoryTrait::new();
 
         mock.expect_create()
-            .with(
-                eq("test@example.com".to_string()),
-                always(),
-            )
+            .with(eq("test@example.com".to_string()), always())
             .times(1)
             .returning(|email, password| {
                 Ok(User {
@@ -67,7 +63,14 @@ mod tests {
         let user = result.unwrap();
         assert_eq!(user.email, "test@example.com");
         // Verify it's actually hashed with pepper
-        assert!(crate::user::crypto::hash_password::verify_password("password123", &user.password, &test_pepper).unwrap());
+        assert!(
+            crate::user::crypto::hash_password::verify_password(
+                "password123",
+                &user.password,
+                &test_pepper
+            )
+            .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -75,10 +78,7 @@ mod tests {
         let mut mock = MockUserRepositoryTrait::new();
 
         mock.expect_create()
-            .with(
-                eq("fail@example.com".to_string()),
-                always(),
-            )
+            .with(eq("fail@example.com".to_string()), always())
             .times(1)
             .returning(|_, _| {
                 Err(RepositoryError::DieselError(
