@@ -9,6 +9,8 @@ pub enum ServiceError {
     UserNotFound,
     #[error("Invalid credentials")]
     InvalidCredentials,
+    #[error("Password hash error: {0}")]
+    HashError(#[from] bcrypt::BcryptError),
 }
 
 pub struct UserService<R: UserRepositoryTrait> {
@@ -53,7 +55,7 @@ impl<R: UserRepositoryTrait> UserService<R> {
             .ok_or(ServiceError::UserNotFound)?;
 
         let is_valid = verify_password(&password, &user.password, &self.pepper)
-            .map_err(|_| ServiceError::InvalidCredentials)?;
+            .map_err(ServiceError::HashError)?;
 
         if !is_valid {
             return Err(ServiceError::InvalidCredentials);
@@ -207,7 +209,10 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Err(RepositoryError::DieselError(
-                    diesel::result::Error::NotFound,
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("connection error".to_string()),
+                    ),
                 ))
             });
 
