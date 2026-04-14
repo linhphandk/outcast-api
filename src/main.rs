@@ -1,4 +1,5 @@
 pub mod schema;
+mod profile;
 mod user;
 use axum::{
     Json, Router,
