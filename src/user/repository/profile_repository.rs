@@ -1,5 +1,6 @@
-use crate::schema::{profiles, social_handles};
+use crate::schema::{profiles, rates, social_handles};
 use async_trait::async_trait;
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use deadpool_diesel::InteractError;
 use deadpool_diesel::postgres::Pool;
@@ -53,6 +54,23 @@ pub struct NewSocialHandle {
     pub follower_count: i32,
 }
 
+#[derive(Debug, PartialEq, Queryable)]
+pub struct Rate {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub rate_type: String,
+    pub amount: BigDecimal,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = rates)]
+pub struct NewRate {
+    pub profile_id: Uuid,
+    #[diesel(column_name = rate_type)]
+    pub rate_type: String,
+    pub amount: BigDecimal,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileRepositoryError {
     #[error("Database pool error: {0}")]
@@ -89,6 +107,13 @@ pub trait ProfileRepositoryTrait {
         url: String,
         follower_count: i32,
     ) -> Result<SocialHandle, ProfileRepositoryError>;
+
+    async fn add_rate(
+        &self,
+        profile_id: Uuid,
+        rate_type: String,
+        amount: BigDecimal,
+    ) -> Result<Rate, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -153,6 +178,31 @@ impl ProfileRepositoryTrait for ProfileRepository {
                 diesel::insert_into(social_handles::table)
                     .values(&new_handle)
                     .get_result::<SocialHandle>(conn)
+            })
+            .await??;
+
+        Ok(inserted)
+    }
+
+    async fn add_rate(
+        &self,
+        profile_id: Uuid,
+        rate_type: String,
+        amount: BigDecimal,
+    ) -> Result<Rate, ProfileRepositoryError> {
+        let conn = self.pool.get().await?;
+
+        let inserted = conn
+            .interact(move |conn| {
+                let new_rate = NewRate {
+                    profile_id,
+                    rate_type,
+                    amount,
+                };
+
+                diesel::insert_into(rates::table)
+                    .values(&new_rate)
+                    .get_result::<Rate>(conn)
             })
             .await??;
 
@@ -409,5 +459,87 @@ mod tests {
         assert_ne!(instagram.id, youtube.id);
         assert_eq!(instagram.platform, "instagram");
         assert_eq!(youtube.platform, "youtube");
+    }
+
+    #[tokio::test]
+    async fn test_add_rate() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let rate = repo
+            .add_rate(
+                profile.id,
+                "post".to_string(),
+                BigDecimal::from(500),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rate.profile_id, profile.id);
+        assert_eq!(rate.rate_type, "post");
+        assert_eq!(rate.amount, BigDecimal::from(500));
+    }
+
+    #[tokio::test]
+    async fn test_add_rate_multiple_types() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let post_rate = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        let story_rate = repo
+            .add_rate(profile.id, "story".to_string(), BigDecimal::from(200))
+            .await
+            .unwrap();
+
+        let reel_rate = repo
+            .add_rate(profile.id, "reel".to_string(), BigDecimal::from(800))
+            .await
+            .unwrap();
+
+        assert_ne!(post_rate.id, story_rate.id);
+        assert_ne!(story_rate.id, reel_rate.id);
+        assert_eq!(post_rate.rate_type, "post");
+        assert_eq!(story_rate.rate_type, "story");
+        assert_eq!(reel_rate.rate_type, "reel");
+    }
+
+    #[tokio::test]
+    async fn test_add_rate_duplicate_type_fails() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        repo.add_rate(profile.id, "post".to_string(), BigDecimal::from(300))
+            .await
+            .unwrap();
+
+        let result = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(400))
+            .await;
+
+        assert!(result.is_err(), "Expected duplicate rate type to fail");
+    }
+
+    #[tokio::test]
+    async fn test_add_rate_invalid_type_fails() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let result = repo
+            .add_rate(profile.id, "invalid_type".to_string(), BigDecimal::from(100))
+            .await;
+
+        assert!(result.is_err(), "Expected invalid rate type to fail");
     }
 }

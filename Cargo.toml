@@ -12,7 +12,8 @@ bcrypt = "0.17.0"
 config = "0.15.22"
 deadpool-diesel = { version = "0.6.1", features = ["postgres"] }
 deadpool-postgres = {version="0.14.1", features=["serde"]}
-diesel = { version = "2.3.7", features = ["postgres", "uuid", "chrono"] }
+bigdecimal = "0.4.8"
+diesel = { version = "2.3.7", features = ["postgres", "uuid", "chrono", "numeric"] }
 hex = "0.4.3"
 hmac = "0.12.1"
 jsonwebtoken = "9.3.1"

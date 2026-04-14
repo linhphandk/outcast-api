@@ -15,6 +15,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    rates (id) {
+        id -> Uuid,
+        profile_id -> Uuid,
+        #[sql_name = "type"]
+        rate_type -> Text,
+        amount -> Numeric,
+    }
+}
+
+diesel::table! {
     social_handles (id) {
         id -> Uuid,
         profile_id -> Uuid,
@@ -37,6 +47,7 @@ diesel::table! {
 }
 
 diesel::joinable!(profiles -> users (user_id));
+diesel::joinable!(rates -> profiles (profile_id));
 diesel::joinable!(social_handles -> profiles (profile_id));
 
-diesel::allow_tables_to_appear_in_same_query!(profiles, social_handles, users,);
+diesel::allow_tables_to_appear_in_same_query!(profiles, rates, social_handles, users,);
