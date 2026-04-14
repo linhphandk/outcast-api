@@ -111,7 +111,8 @@ impl UserRepositoryTrait for UserRepository {
                 RepositoryError::DieselError(e)
             })?;
 
-        info!(user_id = %inserted_user.id, email = %inserted_user.email, "User created successfully");
+        info!(user_id = %inserted_user.id, "User created successfully");
+        debug!(user_id = %inserted_user.id, email = %inserted_user.email, "User creation details");
         Ok(inserted_user)
     }
 
