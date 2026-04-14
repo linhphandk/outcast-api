@@ -5,6 +5,7 @@ use deadpool_diesel::postgres::Pool;
 use diesel::prelude::*;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Queryable)]
@@ -53,10 +54,21 @@ impl UserRepository {
 
 #[async_trait]
 impl UserRepositoryTrait for UserRepository {
+    #[instrument(skip(self, password), fields(email = %email))]
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
-        let conn = self.pool.get().await?;
-        let id = Uuid::new_v4();
+        info!("Creating new user");
 
+        debug!("Acquiring database connection from pool");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection from pool");
+            RepositoryError::PoolError(e)
+        })?;
+        debug!("Database connection acquired");
+
+        let id = Uuid::new_v4();
+        info!(user_id = %id, "Generated new user ID");
+
+        debug!(user_id = %id, "Inserting user into database");
         let inserted_user = conn
             .interact(move |conn| {
                 let new_user = NewUser {
@@ -75,8 +87,32 @@ impl UserRepositoryTrait for UserRepository {
                     password,
                 })
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(user_id = %id, error = %e, "Interact error during user creation");
+                RepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                match &e {
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::UniqueViolation,
+                        info,
+                    ) => {
+                        warn!(
+                            user_id = %id,
+                            constraint = ?info.constraint_name(),
+                            "Unique constraint violation while creating user"
+                        );
+                    }
+                    _ => {
+                        error!(user_id = %id, error = %e, "Diesel error during user creation");
+                    }
+                }
+                RepositoryError::DieselError(e)
+            })?;
 
+        info!(user_id = %inserted_user.id, "User created successfully");
+        debug!(user_id = %inserted_user.id, email = %inserted_user.email, "User creation details");
         Ok(inserted_user)
     }
 
