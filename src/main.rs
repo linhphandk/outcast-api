@@ -13,7 +13,33 @@ use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use user::repository::user_repository::UserRepository;
+use utoipa::OpenApi;
+use utoipa_scalar::{Scalar, Servable};
 use uuid::Uuid;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::user::http::user_controller::create_user,
+        crate::user::http::user_controller::login_user,
+    ),
+    components(
+        schemas(
+            crate::user::http::user_controller::CreateUserReq,
+            crate::user::http::user_controller::CreateUserRes,
+            crate::user::http::user_controller::LoginUserReq,
+        )
+    ),
+    tags(
+        (name = "Users", description = "User management endpoints")
+    ),
+    info(
+        title = "Outcast API",
+        version = "1.0.0",
+        description = "Outcast API documentation"
+    )
+)]
+pub struct ApiDoc;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -132,6 +158,7 @@ async fn main() {
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .merge(crate::user::http::user_controller::router())
+        .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
     println!("Server running at http://{}/", &config.listen);
