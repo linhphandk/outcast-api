@@ -19,11 +19,7 @@ diesel::table! {
         id -> Uuid,
         profile_id -> Uuid,
         #[sql_name = "type"]
-<<<<<<< HEAD
         rate_type -> Text,
-=======
-        type_ -> Text,
->>>>>>> aa5ca95 (scalar)
         amount -> Numeric,
     }
 }
