@@ -13,6 +13,7 @@ use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use user::repository::user_repository::UserRepository;
+use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 use uuid::Uuid;
@@ -38,7 +39,8 @@ use uuid::Uuid;
     info(
         title = "Outcast API",
         version = "1.0.0",
-        description = "Outcast API documentation"
+        description = "Outcast API documentation",
+        license(name = "MIT", url = "https://opensource.org/licenses/MIT")
     )
 )]
 pub struct ApiDoc;
@@ -159,8 +161,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
+        .route("/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .merge(crate::user::http::user_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
+        .layer(CorsLayer::permissive())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
     println!("Server running at http://{}/", &config.listen);

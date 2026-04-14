@@ -8,7 +8,7 @@ diesel::table! {
         bio -> Text,
         niche -> Text,
         avatar_url -> Text,
-        username -> Text,
+        username -> Citext,
         updated_at -> Nullable<Timestamptz>,
         created_at -> Nullable<Timestamptz>,
     }
@@ -19,7 +19,11 @@ diesel::table! {
         id -> Uuid,
         profile_id -> Uuid,
         #[sql_name = "type"]
+<<<<<<< HEAD
         rate_type -> Text,
+=======
+        type_ -> Text,
+>>>>>>> aa5ca95 (scalar)
         amount -> Numeric,
     }
 }
