@@ -66,7 +66,6 @@ pub struct Rate {
 #[diesel(table_name = rates)]
 pub struct NewRate {
     pub profile_id: Uuid,
-    #[diesel(column_name = rate_type)]
     pub rate_type: String,
     pub amount: BigDecimal,
 }
