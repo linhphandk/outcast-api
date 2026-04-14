@@ -12,19 +12,30 @@ use crate::user::repository::user_repository::{RepositoryError, UserRepository};
 use crate::user::usecase::user_service::{ServiceError, UserService};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateUserReq {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateUserRes {
     pub id: Uuid,
     pub email: String,
     pub token: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/user",
+    request_body = CreateUserReq,
+    responses(
+        (status = 201, description = "User created successfully", body = CreateUserRes),
+        (status = 409, description = "User already exists"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Users"
+)]
 pub async fn create_user(
     State(service): State<UserService<UserRepository>>,
     State(jwt_secret): State<String>,
@@ -76,12 +87,23 @@ pub async fn create_user(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct LoginUserReq {
     pub email: String,
     pub password: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/user/login",
+    request_body = LoginUserReq,
+    responses(
+        (status = 200, description = "Login successful", body = CreateUserRes),
+        (status = 401, description = "Invalid email or password"),
+        (status = 500, description = "Login failed")
+    ),
+    tag = "Users"
+)]
 pub async fn login_user(
     State(service): State<UserService<UserRepository>>,
     State(jwt_secret): State<String>,
@@ -148,12 +170,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ApiDoc;
     use crate::user::crypto::jwt::verify_jwt;
     use axum::body::Body;
     use axum::http::Request;
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+    use utoipa::OpenApi;
+    use utoipa_scalar::{Scalar, Servable};
 
     pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -212,6 +237,7 @@ mod tests {
         Router::new()
             .route("/user", post(create_user))
             .route("/user/login", post(login_user))
+            .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
             .with_state(state)
     }
 
@@ -429,5 +455,20 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_scalar_ui_accessible() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/scalar")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
