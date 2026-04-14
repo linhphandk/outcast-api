@@ -9,15 +9,16 @@ use axum_extra::TypedHeader;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use bigdecimal::BigDecimal;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::user::crypto::jwt::verify_jwt;
 use crate::user::repository::profile_repository::{
-    ProfileRepository, RateInput, SocialHandleInput,
+    ProfileRepository, ProfileRepositoryError, RateInput, SocialHandleInput,
 };
-use crate::user::usecase::profile_service::ProfileService;
+use crate::user::usecase::profile_service::{ProfileService, ProfileServiceError};
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct SocialHandleReq {
@@ -81,6 +82,7 @@ pub struct CreateProfileRes {
         (status = 201, description = "Profile created successfully", body = CreateProfileRes),
         (status = 400, description = "Invalid amount format"),
         (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Profile already exists"),
         (status = 500, description = "Internal server error")
     ),
     security(("bearer_token" = [])),
@@ -173,6 +175,9 @@ pub async fn create_profile(
             };
             (StatusCode::CREATED, Json(res)).into_response()
         }
+        Err(ProfileServiceError::RepositoryError(ProfileRepositoryError::DieselError(
+            DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _),
+        ))) => (StatusCode::CONFLICT, "Profile already exists").into_response(),
         Err(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create profile").into_response()
         }
