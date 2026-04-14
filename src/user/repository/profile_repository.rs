@@ -9,7 +9,7 @@ use diesel::prelude::*;
 use mockall::{automock, predicate::*};
 use uuid::Uuid;
 
-#[derive(Debug, PartialEq, Queryable)]
+#[derive(Debug, PartialEq, Clone, Queryable)]
 pub struct Profile {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -33,7 +33,7 @@ pub struct NewProfile {
     pub username: String,
 }
 
-#[derive(Debug, PartialEq, Queryable)]
+#[derive(Debug, PartialEq, Clone, Queryable)]
 pub struct SocialHandle {
     pub id: Uuid,
     pub profile_id: Uuid,
@@ -54,7 +54,7 @@ pub struct NewSocialHandle {
     pub follower_count: i32,
 }
 
-#[derive(Debug, PartialEq, Queryable)]
+#[derive(Debug, PartialEq, Clone, Queryable)]
 pub struct Rate {
     pub id: Uuid,
     pub profile_id: Uuid,
@@ -68,6 +68,27 @@ pub struct NewRate {
     pub profile_id: Uuid,
     pub rate_type: String,
     pub amount: BigDecimal,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SocialHandleInput {
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct RateInput {
+    pub rate_type: String,
+    pub amount: BigDecimal,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ProfileWithDetails {
+    pub profile: Profile,
+    pub social_handles: Vec<SocialHandle>,
+    pub rates: Vec<Rate>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -113,6 +134,18 @@ pub trait ProfileRepositoryTrait {
         rate_type: String,
         amount: BigDecimal,
     ) -> Result<Rate, ProfileRepositoryError>;
+
+    async fn create_with_details(
+        &self,
+        user_id: Uuid,
+        name: String,
+        bio: String,
+        niche: String,
+        avatar_url: String,
+        username: String,
+        social_handles: Vec<SocialHandleInput>,
+        rates: Vec<RateInput>,
+    ) -> Result<ProfileWithDetails, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -206,6 +239,72 @@ impl ProfileRepositoryTrait for ProfileRepository {
             .await??;
 
         Ok(inserted)
+    }
+
+    async fn create_with_details(
+        &self,
+        user_id: Uuid,
+        name: String,
+        bio: String,
+        niche: String,
+        avatar_url: String,
+        username: String,
+        social_handle_inputs: Vec<SocialHandleInput>,
+        rate_inputs: Vec<RateInput>,
+    ) -> Result<ProfileWithDetails, ProfileRepositoryError> {
+        let conn = self.pool.get().await?;
+
+        let result = conn
+            .interact(move |conn| {
+                conn.transaction(|conn| -> Result<ProfileWithDetails, diesel::result::Error> {
+                    let new_profile = NewProfile {
+                        user_id,
+                        name,
+                        bio,
+                        niche,
+                        avatar_url,
+                        username,
+                    };
+                    let profile = diesel::insert_into(profiles::table)
+                        .values(&new_profile)
+                        .get_result::<Profile>(conn)?;
+
+                    let new_handles: Vec<NewSocialHandle> = social_handle_inputs
+                        .into_iter()
+                        .map(|input| NewSocialHandle {
+                            profile_id: profile.id,
+                            platform: input.platform,
+                            handle: input.handle,
+                            url: input.url,
+                            follower_count: input.follower_count,
+                        })
+                        .collect();
+                    let inserted_handles = diesel::insert_into(social_handles::table)
+                        .values(&new_handles)
+                        .get_results::<SocialHandle>(conn)?;
+
+                    let new_rates: Vec<NewRate> = rate_inputs
+                        .into_iter()
+                        .map(|input| NewRate {
+                            profile_id: profile.id,
+                            rate_type: input.rate_type,
+                            amount: input.amount,
+                        })
+                        .collect();
+                    let inserted_rates = diesel::insert_into(rates::table)
+                        .values(&new_rates)
+                        .get_results::<Rate>(conn)?;
+
+                    Ok(ProfileWithDetails {
+                        profile,
+                        social_handles: inserted_handles,
+                        rates: inserted_rates,
+                    })
+                })
+            })
+            .await??;
+
+        Ok(result)
     }
 }
 
@@ -540,5 +639,134 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "Expected invalid rate type to fail");
+    }
+
+    #[tokio::test]
+    async fn test_create_with_details_success() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+
+        let result = repo
+            .create_with_details(
+                user_id,
+                "Alice".to_string(),
+                "Tech creator".to_string(),
+                "technology".to_string(),
+                "https://example.com/avatar.png".to_string(),
+                "alice_tech".to_string(),
+                vec![
+                    SocialHandleInput {
+                        platform: "instagram".to_string(),
+                        handle: "@alice_tech".to_string(),
+                        url: "https://instagram.com/alice_tech".to_string(),
+                        follower_count: 50_000,
+                    },
+                    SocialHandleInput {
+                        platform: "youtube".to_string(),
+                        handle: "@alice_yt".to_string(),
+                        url: "https://youtube.com/@alice_yt".to_string(),
+                        follower_count: 10_000,
+                    },
+                ],
+                vec![
+                    RateInput {
+                        rate_type: "post".to_string(),
+                        amount: BigDecimal::from(500),
+                    },
+                    RateInput {
+                        rate_type: "story".to_string(),
+                        amount: BigDecimal::from(200),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.profile.user_id, user_id);
+        assert_eq!(result.profile.name, "Alice");
+        assert_eq!(result.profile.username, "alice_tech");
+        assert_eq!(result.social_handles.len(), 2);
+        assert_eq!(result.social_handles[0].platform, "instagram");
+        assert_eq!(result.social_handles[1].platform, "youtube");
+        assert_eq!(result.rates.len(), 2);
+        assert_eq!(result.rates[0].rate_type, "post");
+        assert_eq!(result.rates[1].rate_type, "story");
+        assert_eq!(result.social_handles[0].profile_id, result.profile.id);
+        assert_eq!(result.rates[0].profile_id, result.profile.id);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_details_no_handles_no_rates() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+
+        let result = repo
+            .create_with_details(
+                user_id,
+                "Bob".to_string(),
+                "Gaming".to_string(),
+                "gaming".to_string(),
+                "https://example.com/bob.png".to_string(),
+                "bob_games".to_string(),
+                vec![],
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.profile.user_id, user_id);
+        assert_eq!(result.profile.username, "bob_games");
+        assert!(result.social_handles.is_empty());
+        assert!(result.rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_with_details_rolls_back_on_duplicate_handle() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool.clone());
+
+        let result = repo
+            .create_with_details(
+                user_id,
+                "Charlie".to_string(),
+                "Food blogger".to_string(),
+                "food".to_string(),
+                "https://example.com/charlie.png".to_string(),
+                "charlie_food".to_string(),
+                vec![
+                    SocialHandleInput {
+                        platform: "instagram".to_string(),
+                        handle: "@charlie".to_string(),
+                        url: "https://instagram.com/charlie".to_string(),
+                        follower_count: 1_000,
+                    },
+                    SocialHandleInput {
+                        platform: "instagram".to_string(),
+                        handle: "@charlie_dup".to_string(),
+                        url: "https://instagram.com/charlie_dup".to_string(),
+                        follower_count: 2_000,
+                    },
+                ],
+                vec![],
+            )
+            .await;
+
+        assert!(result.is_err(), "Expected duplicate platform to fail");
+
+        let conn = pool.get().await.unwrap();
+        let count: i64 = conn
+            .interact(|conn| {
+                crate::schema::profiles::table
+                    .count()
+                    .get_result::<i64>(conn)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(count, 0, "Profile should have been rolled back");
     }
 }
