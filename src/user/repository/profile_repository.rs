@@ -1,4 +1,4 @@
-use crate::schema::profiles;
+use crate::schema::{profiles, social_handles};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use deadpool_diesel::InteractError;
@@ -32,6 +32,27 @@ pub struct NewProfile {
     pub username: String,
 }
 
+#[derive(Debug, PartialEq, Queryable)]
+pub struct SocialHandle {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = social_handles)]
+pub struct NewSocialHandle {
+    pub profile_id: Uuid,
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileRepositoryError {
     #[error("Database pool error: {0}")]
@@ -59,6 +80,15 @@ pub trait ProfileRepositoryTrait {
         avatar_url: String,
         username: String,
     ) -> Result<Profile, ProfileRepositoryError>;
+
+    async fn add_social_handle(
+        &self,
+        profile_id: Uuid,
+        platform: String,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<SocialHandle, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -98,6 +128,35 @@ impl ProfileRepositoryTrait for ProfileRepository {
             .await??;
 
         Ok(inserted_profile)
+    }
+
+    async fn add_social_handle(
+        &self,
+        profile_id: Uuid,
+        platform: String,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<SocialHandle, ProfileRepositoryError> {
+        let conn = self.pool.get().await?;
+
+        let inserted = conn
+            .interact(move |conn| {
+                let new_handle = NewSocialHandle {
+                    profile_id,
+                    platform,
+                    handle,
+                    url,
+                    follower_count,
+                };
+
+                diesel::insert_into(social_handles::table)
+                    .values(&new_handle)
+                    .get_result::<SocialHandle>(conn)
+            })
+            .await??;
+
+        Ok(inserted)
     }
 }
 
@@ -247,5 +306,108 @@ mod tests {
             .unwrap();
 
         assert_ne!(profile1.id, profile2.id);
+    }
+
+    async fn create_test_profile(repo: &ProfileRepository, user_id: Uuid) -> Profile {
+        repo.create(
+            user_id,
+            "Alice".to_string(),
+            "Tech creator".to_string(),
+            "technology".to_string(),
+            "https://example.com/avatar.png".to_string(),
+            format!("alice_{}", Uuid::new_v4().simple()),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_add_social_handle() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let social_handle = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice_tech".to_string(),
+                "https://instagram.com/alice_tech".to_string(),
+                50_000,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(social_handle.profile_id, profile.id);
+        assert_eq!(social_handle.platform, "instagram");
+        assert_eq!(social_handle.handle, "@alice_tech");
+        assert_eq!(social_handle.url, "https://instagram.com/alice_tech");
+        assert_eq!(social_handle.follower_count, 50_000);
+        assert!(social_handle.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_add_social_handle_duplicate_platform_fails() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        repo.add_social_handle(
+            profile.id,
+            "tiktok".to_string(),
+            "@alice".to_string(),
+            "https://tiktok.com/@alice".to_string(),
+            10_000,
+        )
+        .await
+        .unwrap();
+
+        let result = repo
+            .add_social_handle(
+                profile.id,
+                "tiktok".to_string(),
+                "@alice_duplicate".to_string(),
+                "https://tiktok.com/@alice_duplicate".to_string(),
+                20_000,
+            )
+            .await;
+
+        assert!(result.is_err(), "Expected duplicate platform to fail");
+    }
+
+    #[tokio::test]
+    async fn test_add_social_handle_multiple_platforms() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let instagram = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice_ig".to_string(),
+                "https://instagram.com/alice_ig".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        let youtube = repo
+            .add_social_handle(
+                profile.id,
+                "youtube".to_string(),
+                "@alice_yt".to_string(),
+                "https://youtube.com/@alice_yt".to_string(),
+                5_000,
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(instagram.id, youtube.id);
+        assert_eq!(instagram.platform, "instagram");
+        assert_eq!(youtube.platform, "youtube");
     }
 }
