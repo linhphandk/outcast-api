@@ -13,6 +13,7 @@ use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
+use user::repository::profile_repository::ProfileRepository;
 use user::repository::user_repository::UserRepository;
 use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
@@ -25,6 +26,7 @@ use uuid::Uuid;
         crate::user::http::user_controller::create_user,
         crate::user::http::user_controller::login_user,
         crate::user::http::user_controller::get_me,
+        crate::user::http::profile_controller::create_profile,
     ),
     components(
         schemas(
@@ -32,10 +34,17 @@ use uuid::Uuid;
             crate::user::http::user_controller::CreateUserRes,
             crate::user::http::user_controller::LoginUserReq,
             crate::user::http::user_controller::MeRes,
+            crate::user::http::profile_controller::CreateProfileReq,
+            crate::user::http::profile_controller::CreateProfileRes,
+            crate::user::http::profile_controller::SocialHandleReq,
+            crate::user::http::profile_controller::SocialHandleRes,
+            crate::user::http::profile_controller::RateReq,
+            crate::user::http::profile_controller::RateRes,
         )
     ),
     tags(
-        (name = "Users", description = "User management endpoints")
+        (name = "Users", description = "User management endpoints"),
+        (name = "Profiles", description = "Profile management endpoints")
     ),
     info(
         title = "Outcast API",
@@ -75,6 +84,7 @@ struct Event {
 pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
+    pub profile_service: crate::user::usecase::profile_service::ProfileService<ProfileRepository>,
     pub jwt_secret: String,
 }
 
@@ -89,6 +99,14 @@ impl axum::extract::FromRef<AppState>
 {
     fn from_ref(state: &AppState) -> Self {
         state.user_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState>
+    for crate::user::usecase::profile_service::ProfileService<ProfileRepository>
+{
+    fn from_ref(state: &AppState) -> Self {
+        state.profile_service.clone()
     }
 }
 
@@ -154,15 +172,20 @@ async fn main() {
         .build()
         .unwrap();
 
-    let user_repository = UserRepository::new(diesel_pool);
+    let user_repository = UserRepository::new(diesel_pool.clone());
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
         config.password_pepper,
     );
 
+    let profile_repository = ProfileRepository::new(diesel_pool);
+    let profile_service =
+        crate::user::usecase::profile_service::ProfileService::new(profile_repository);
+
     let state = AppState {
         pool,
         user_service,
+        profile_service,
         jwt_secret: config.jwt_secret,
     };
 
@@ -170,6 +193,7 @@ async fn main() {
         .route("/v1.0/event.list", get(event_list))
         .route("/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .merge(crate::user::http::user_controller::router())
+        .merge(crate::user::http::profile_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(CorsLayer::permissive())
         .with_state(state);
