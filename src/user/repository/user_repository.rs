@@ -6,7 +6,8 @@ use diesel::prelude::*;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use uuid::Uuid;
-#[derive(Debug, PartialEq)]
+
+#[derive(Debug, PartialEq, Queryable)]
 pub struct User {
     pub id: Uuid,
     pub email: String,
@@ -35,11 +36,14 @@ pub enum RepositoryError {
 pub struct UserRepository {
     pool: Pool,
 }
+
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait UserRepositoryTrait {
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError>;
+    async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError>;
 }
+
 impl UserRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
@@ -73,6 +77,21 @@ impl UserRepositoryTrait for UserRepository {
             .await??;
 
         Ok(inserted_user)
+    }
+
+    async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError> {
+        let conn = self.pool.get().await?;
+
+        let user = conn
+            .interact(move |conn| {
+                users::table
+                    .filter(users::email.eq(&email))
+                    .first::<User>(conn)
+                    .optional()
+            })
+            .await??;
+
+        Ok(user)
     }
 }
 
@@ -148,5 +167,40 @@ mod tests {
             duplicate_result.is_err(),
             "Expected duplicate email creation to fail!"
         );
+    }
+
+    #[tokio::test]
+    async fn test_find_by_email_returns_user() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let created_user = repo
+            .create("findme@example.com".to_string(), "password123".to_string())
+            .await
+            .unwrap();
+
+        let found_user = repo
+            .find_by_email("findme@example.com".to_string())
+            .await
+            .unwrap();
+
+        assert!(found_user.is_some());
+        let found_user = found_user.unwrap();
+        assert_eq!(found_user.id, created_user.id);
+        assert_eq!(found_user.email, "findme@example.com");
+        assert_eq!(found_user.password, "password123");
+    }
+
+    #[tokio::test]
+    async fn test_find_by_email_returns_none_when_not_found() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let found_user = repo
+            .find_by_email("nonexistent@example.com".to_string())
+            .await
+            .unwrap();
+
+        assert!(found_user.is_none());
     }
 }
