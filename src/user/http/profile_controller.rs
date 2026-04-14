@@ -392,7 +392,7 @@ mod tests {
             .method("POST")
             .uri("/profile")
             .header("content-type", "application/json")
-            .header("Authorization", format!("Bearer {}", token.clone()))
+            .header("Authorization", format!("Bearer {}", token))
             .body(Body::from(profile_body("duplicate_user")))
             .unwrap();
 
