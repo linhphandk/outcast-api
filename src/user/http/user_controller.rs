@@ -3,11 +3,15 @@ use axum::{
     extract::State,
     http::{StatusCode, header},
     response::{AppendHeaders, IntoResponse},
-    routing::post,
+    routing::{get, post},
 };
+use axum_extra::TypedHeader;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::user::crypto::jwt::verify_jwt;
 use crate::user::repository::user_repository::{RepositoryError, UserRepository};
 use crate::user::usecase::user_service::{ServiceError, UserService};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
@@ -156,6 +160,49 @@ pub async fn login_user(
     }
 }
 
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MeRes {
+    pub id: Uuid,
+    pub email: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/user/me",
+    responses(
+        (status = 200, description = "Current user info", body = MeRes),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Users"
+)]
+pub async fn get_me(
+    State(service): State<UserService<UserRepository>>,
+    State(jwt_secret): State<String>,
+    TypedHeader(bearer): TypedHeader<Authorization<Bearer>>,
+) -> impl IntoResponse {
+    let claims = match verify_jwt(bearer.token(), &jwt_secret) {
+        Ok(c) => c,
+        Err(_) => {
+            return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
+        }
+    };
+
+    match service.get_me(claims.sub).await {
+        Ok(user) => Json(MeRes {
+            id: user.id,
+            email: user.email,
+        })
+        .into_response(),
+        Err(ServiceError::UserNotFound) => {
+            (StatusCode::NOT_FOUND, "User not found").into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user").into_response(),
+    }
+}
+
 pub fn router<S>() -> Router<S>
 where
     UserService<UserRepository>: axum::extract::FromRef<S>,
@@ -165,6 +212,7 @@ where
     Router::new()
         .route("/user", post(create_user))
         .route("/user/login", post(login_user))
+        .route("/user/me", get(get_me))
 }
 
 #[cfg(test)]
@@ -237,6 +285,7 @@ mod tests {
         Router::new()
             .route("/user", post(create_user))
             .route("/user/login", post(login_user))
+            .route("/user/me", get(get_me))
             .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
             .with_state(state)
     }
@@ -470,5 +519,79 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_get_me_success() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+
+        // Create a user first
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "me@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let create_response = app.oneshot(create_request).await.unwrap();
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let body = create_response.into_body().collect().await.unwrap().to_bytes();
+        let created: CreateUserRes = serde_json::from_slice(&body).unwrap();
+
+        // Call /user/me with the token
+        let app = build_app(pool);
+        let me_request = Request::builder()
+            .method("GET")
+            .uri("/user/me")
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(me_request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let me_res: MeRes = serde_json::from_slice(&body).unwrap();
+        assert_eq!(me_res.id, created.id);
+        assert_eq!(me_res.email, "me@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_get_me_missing_token() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/user/me")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_me_invalid_token() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/user/me")
+            .header("Authorization", "Bearer this.is.not.a.valid.token")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

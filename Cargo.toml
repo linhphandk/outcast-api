@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.86"
 axum = "0.8.1"
-axum-extra = { version = "0.10.0", features = ["cookie"] }
+axum-extra = { version = "0.10.0", features = ["cookie", "typed-header"] }
 axum-macros = "0.5.0"
 bcrypt = "0.17.0"
 config = "0.15.22"

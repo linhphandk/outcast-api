@@ -22,12 +22,14 @@ use uuid::Uuid;
     paths(
         crate::user::http::user_controller::create_user,
         crate::user::http::user_controller::login_user,
+        crate::user::http::user_controller::get_me,
     ),
     components(
         schemas(
             crate::user::http::user_controller::CreateUserReq,
             crate::user::http::user_controller::CreateUserRes,
             crate::user::http::user_controller::LoginUserReq,
+            crate::user::http::user_controller::MeRes,
         )
     ),
     tags(
