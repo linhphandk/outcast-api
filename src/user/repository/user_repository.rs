@@ -42,6 +42,7 @@ pub struct UserRepository {
 pub trait UserRepositoryTrait {
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError>;
     async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepositoryError>;
 }
 
 impl UserRepository {
@@ -86,6 +87,21 @@ impl UserRepositoryTrait for UserRepository {
             .interact(move |conn| {
                 users::table
                     .filter(users::email.eq(&email))
+                    .first::<User>(conn)
+                    .optional()
+            })
+            .await??;
+
+        Ok(user)
+    }
+
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepositoryError> {
+        let conn = self.pool.get().await?;
+
+        let user = conn
+            .interact(move |conn| {
+                users::table
+                    .filter(users::id.eq(&id))
                     .first::<User>(conn)
                     .optional()
             })
@@ -200,6 +216,34 @@ mod tests {
             .find_by_email("nonexistent@example.com".to_string())
             .await
             .unwrap();
+
+        assert!(found_user.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_by_id_returns_user() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let created_user = repo
+            .create("byid@example.com".to_string(), "password123".to_string())
+            .await
+            .unwrap();
+
+        let found_user = repo.find_by_id(created_user.id).await.unwrap();
+
+        assert!(found_user.is_some());
+        let found_user = found_user.unwrap();
+        assert_eq!(found_user.id, created_user.id);
+        assert_eq!(found_user.email, "byid@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_find_by_id_returns_none_when_not_found() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let found_user = repo.find_by_id(Uuid::new_v4()).await.unwrap();
 
         assert!(found_user.is_none());
     }

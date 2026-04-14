@@ -1,5 +1,6 @@
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
@@ -62,6 +63,14 @@ impl<R: UserRepositoryTrait> UserService<R> {
         }
 
         Ok(user)
+    }
+
+    pub async fn get_me(&self, user_id: Uuid) -> Result<User, ServiceError> {
+        self.repository
+            .find_by_id(user_id)
+            .await
+            .map_err(ServiceError::RepositoryError)?
+            .ok_or(ServiceError::UserNotFound)
     }
 }
 
@@ -220,6 +229,67 @@ mod tests {
         let result = service
             .authenticate("user@example.com".to_string(), "password123".to_string())
             .await;
+
+        assert!(matches!(result, Err(ServiceError::RepositoryError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_me_success() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockUserRepositoryTrait::new();
+        mock.expect_find_by_id()
+            .with(eq(user_id))
+            .times(1)
+            .returning(move |id| {
+                Ok(Some(User {
+                    id,
+                    email: "me@example.com".to_string(),
+                    password: "hashed".to_string(),
+                }))
+            });
+
+        let service = UserService::new(mock, "test_pepper".to_string());
+        let result = service.get_me(user_id).await;
+
+        assert!(result.is_ok());
+        let user = result.unwrap();
+        assert_eq!(user.id, user_id);
+        assert_eq!(user.email, "me@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_get_me_not_found() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockUserRepositoryTrait::new();
+        mock.expect_find_by_id()
+            .with(eq(user_id))
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let service = UserService::new(mock, "test_pepper".to_string());
+        let result = service.get_me(user_id).await;
+
+        assert!(matches!(result, Err(ServiceError::UserNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_get_me_repository_error() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockUserRepositoryTrait::new();
+        mock.expect_find_by_id()
+            .with(eq(user_id))
+            .times(1)
+            .returning(|_| {
+                Err(RepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("connection error".to_string()),
+                    ),
+                ))
+            });
+
+        let service = UserService::new(mock, "test_pepper".to_string());
+        let result = service.get_me(user_id).await;
 
         assert!(matches!(result, Err(ServiceError::RepositoryError(_))));
     }
