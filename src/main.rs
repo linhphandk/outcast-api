@@ -1,5 +1,6 @@
 pub mod schema;
 mod user;
+use tracing::info;
 use axum::{
     Json, Router,
     extract::State,
@@ -133,6 +134,12 @@ async fn event_list(pool: State<Pool>) -> Result<Json<Vec<Event>>, Error> {
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let config = Config::from_env().unwrap();
     let pool = config
         .pg
@@ -167,8 +174,8 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
-    println!("Server running at http://{}/", &config.listen);
-    println!(
+    info!("Server running at http://{}/", &config.listen);
+    info!(
         "Try the following URLs: http://{}/v1.0/event.list",
         &config.listen,
     );
