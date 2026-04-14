@@ -199,10 +199,7 @@ mod tests {
         .await
         .unwrap();
 
-        let second_user_id = {
-            let pool2 = repo.pool.clone();
-            create_test_user(&pool2).await
-        };
+        let second_user_id = create_test_user(&repo.pool).await;
 
         let result = repo
             .create(
