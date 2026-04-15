@@ -152,7 +152,7 @@ The project follows **Hexagonal Architecture** (also known as Ports and Adapters
 | Async Runtime          | Tokio                          | 1.51.1    |
 | JWT                    | jsonwebtoken                   | 9.3.1     |
 | Password Hashing       | bcrypt                         | 0.17.0    |
-| Password Peppering     | HMAC-SHA256 (hmac + sha2)      | 0.12.1 / 0.10.8 |
+| Password Pepper        | HMAC-SHA256 (hmac + sha2)      | 0.12.1 / 0.10.8 |
 | Configuration          | config + dotenvy               | 0.15.22 / 0.15.7 |
 | Serialization          | serde + serde_json             | 1.0.228   |
 | Error Handling         | thiserror                      | 2.0.18    |
@@ -193,21 +193,20 @@ The project follows **Hexagonal Architecture** (also known as Ports and Adapters
 │ created_at       │
 └──────────────────┘
         │
-        │ 1:N                1:N
-        ├──────────────┬──────────────┐
-        ▼              ▼              │
-┌──────────────┐ ┌──────────────┐     │
-│social_handles│ │    rates     │     │
-├──────────────┤ ├──────────────┤     │
-│ id (UUID, PK)│ │ id (UUID, PK)│     │
-│ profile_id   │ │ profile_id   │     │
-│ (UUID, FK)   │ │ (UUID, FK)   │     │
-│ platform     │ │ type (TEXT)  │     │
-│ handle       │ │ amount       │     │
-│ url          │ │ (NUMERIC)    │     │
-│ follower_cnt │ └──────────────┘     │
-│ updated_at   │                      │
-└──────────────┘                      │
+        │ 1:N                     1:N
+        ▼                         ▼
+┌──────────────┐         ┌──────────────┐
+│social_handles│         │    rates     │
+├──────────────┤         ├──────────────┤
+│ id (UUID, PK)│         │ id (UUID, PK)│
+│ profile_id   │         │ profile_id   │
+│ (UUID, FK)   │         │ (UUID, FK)   │
+│ platform     │         │ type (TEXT)  │
+│ handle       │         │ amount       │
+│ url          │         │ (NUMERIC)    │
+│ follower_cnt │         └──────────────┘
+│ updated_at   │
+└──────────────┘
 ```
 
 ### Table Details
@@ -328,10 +327,10 @@ Each field implements `FromRef<AppState>`, allowing Axum handlers to extract ind
 | POST   | `/user/login`          | `login_user`        | No            | Authenticate and get tokens          |
 | GET    | `/user/me`             | `get_me`            | Yes (JWT)     | Get current authenticated user info  |
 | POST   | `/auth/refresh`        | `refresh_session`   | Cookie        | Rotate refresh token, get new tokens |
-| POST   | `/auth/logout`         | `logout`            | —             | Logout (not yet implemented)         |
-| POST   | `/auth/logout-all`     | `logout_all`        | —             | Logout all sessions (not yet implemented) |
-| GET    | `/auth/sessions`       | `list_sessions`     | —             | List active sessions (not yet implemented) |
-| DELETE | `/auth/sessions/{id}`  | `delete_session`    | —             | Delete a session (not yet implemented) |
+| POST   | `/auth/logout`         | `logout`            | TBD           | Logout (not yet implemented)         |
+| POST   | `/auth/logout-all`     | `logout_all`        | TBD           | Logout all sessions (not yet implemented) |
+| GET    | `/auth/sessions`       | `list_sessions`     | TBD           | List active sessions (not yet implemented) |
+| DELETE | `/auth/sessions/{id}`  | `delete_session`    | TBD           | Delete a session (not yet implemented) |
 | GET    | `/v1.0/event.list`     | `event_list`        | No            | List events (raw SQL query)          |
 | GET    | `/openapi.json`        | (inline)            | No            | OpenAPI spec (JSON)                  |
 | GET    | `/scalar`              | Scalar UI           | No            | Interactive API documentation UI     |
@@ -1144,7 +1143,7 @@ cargo test test_create_user_success
 
 ### Prerequisites
 
-- **Rust** (latest stable edition)
+- **Rust** (Edition 2024 or later)
 - **Docker** and **Docker Compose** (for PostgreSQL + Adminer)
 - **Diesel CLI** — `cargo install diesel_cli --no-default-features --features postgres`
 
