@@ -62,8 +62,8 @@ pub trait SessionRepositoryTrait: Send + Sync {
         &self,
         user_id: Uuid,
         refresh_token: &str,
-        user_agent: Option<&str>,
-        ip_address: Option<&str>,
+        user_agent: Option<String>,
+        ip_address: Option<String>,
         expires_at: NaiveDateTime,
     ) -> Result<Session, SessionRepositoryError>;
 
@@ -99,8 +99,8 @@ impl SessionRepositoryTrait for SessionRepository {
         &self,
         user_id: Uuid,
         refresh_token: &str,
-        user_agent: Option<&str>,
-        ip_address: Option<&str>,
+        user_agent: Option<String>,
+        ip_address: Option<String>,
         expires_at: NaiveDateTime,
     ) -> Result<Session, SessionRepositoryError> {
         info!("Creating new session");
@@ -112,8 +112,6 @@ impl SessionRepositoryTrait for SessionRepository {
 
         let id = Uuid::new_v4();
         let refresh_token = refresh_token.to_string();
-        let user_agent = user_agent.map(str::to_string);
-        let ip_address = ip_address.map(str::to_string);
 
         let session = conn
             .interact(move |conn| {
@@ -410,8 +408,8 @@ mod tests {
             .create(
                 user_id,
                 "token_abc",
-                Some("Mozilla/5.0"),
-                Some("127.0.0.1"),
+                Some("Mozilla/5.0".to_string()),
+                Some("127.0.0.1".to_string()),
                 make_expires_at(),
             )
             .await
