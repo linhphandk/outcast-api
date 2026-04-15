@@ -58,11 +58,11 @@ pub async fn refresh(
         Ok((access_token, new_refresh_token)) => {
             info!("Session refreshed successfully");
             let access_cookie = format!(
-                "token={}; HttpOnly; Path=/; Max-Age=900; SameSite=Lax",
+                "token={}; HttpOnly; Secure; Path=/; Max-Age=900; SameSite=Lax",
                 access_token
             );
             let refresh_cookie = format!(
-                "refresh_token={}; HttpOnly; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
+                "refresh_token={}; HttpOnly; Secure; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
                 new_refresh_token
             );
             (
@@ -106,9 +106,9 @@ pub async fn logout(
         .await
     {
         Ok(()) => {
-            let clear_access = "token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax";
+            let clear_access = "token=; HttpOnly; Secure; Path=/; Max-Age=0; SameSite=Lax";
             let clear_refresh =
-                "refresh_token=; HttpOnly; Path=/auth/refresh; Max-Age=0; SameSite=Strict";
+                "refresh_token=; HttpOnly; Secure; Path=/auth/refresh; Max-Age=0; SameSite=Strict";
             (
                 StatusCode::OK,
                 AppendHeaders([
@@ -139,9 +139,9 @@ pub async fn logout_all(
     info!(user_id = %auth_user.user_id, "Logout-all request");
     match session_service.revoke_all_sessions(auth_user.user_id).await {
         Ok(()) => {
-            let clear_access = "token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax";
+            let clear_access = "token=; HttpOnly; Secure; Path=/; Max-Age=0; SameSite=Lax";
             let clear_refresh =
-                "refresh_token=; HttpOnly; Path=/auth/refresh; Max-Age=0; SameSite=Strict";
+                "refresh_token=; HttpOnly; Secure; Path=/auth/refresh; Max-Age=0; SameSite=Strict";
             (
                 StatusCode::OK,
                 AppendHeaders([

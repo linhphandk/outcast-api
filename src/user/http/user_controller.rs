@@ -65,11 +65,11 @@ pub async fn create_user(
                     };
 
                     let access_cookie = format!(
-                        "token={}; HttpOnly; Path=/; Max-Age=900; SameSite=Lax",
+                        "token={}; HttpOnly; Secure; Path=/; Max-Age=900; SameSite=Lax",
                         access_token
                     );
                     let refresh_cookie = format!(
-                        "refresh_token={}; HttpOnly; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
+                        "refresh_token={}; HttpOnly; Secure; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
                         refresh_token
                     );
 
@@ -151,11 +151,11 @@ pub async fn login_user(
                     };
 
                     let access_cookie = format!(
-                        "token={}; HttpOnly; Path=/; Max-Age=900; SameSite=Lax",
+                        "token={}; HttpOnly; Secure; Path=/; Max-Age=900; SameSite=Lax",
                         access_token
                     );
                     let refresh_cookie = format!(
-                        "refresh_token={}; HttpOnly; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
+                        "refresh_token={}; HttpOnly; Secure; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
                         refresh_token
                     );
 
