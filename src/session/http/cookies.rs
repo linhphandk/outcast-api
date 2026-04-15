@@ -33,9 +33,28 @@ pub fn set_auth_cookies(jar: CookieJar, access: String, refresh: String) -> Cook
 }
 
 /// Clears `token` and `refresh_token` cookies.
+///
+/// Uses `add()` with `Max-Age=0` rather than `remove()` so that the
+/// `Set-Cookie` removal headers are **always** emitted in the response,
+/// even when the client did not include those cookies in the request.
 pub fn clear_auth_cookies(jar: CookieJar) -> CookieJar {
-    jar.remove(Cookie::from(TOKEN_COOKIE_NAME))
-        .remove(Cookie::from(REFRESH_TOKEN_COOKIE_NAME))
+    let secure = cfg!(not(debug_assertions));
+
+    let token_cookie = Cookie::build((TOKEN_COOKIE_NAME, ""))
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .secure(secure)
+        .max_age(Duration::seconds(0));
+
+    let refresh_cookie = Cookie::build((REFRESH_TOKEN_COOKIE_NAME, ""))
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .path("/auth/refresh")
+        .secure(secure)
+        .max_age(Duration::seconds(0));
+
+    jar.add(token_cookie).add(refresh_cookie)
 }
 
 #[cfg(test)]
@@ -88,7 +107,14 @@ mod tests {
 
         let jar = clear_auth_cookies(jar);
 
-        assert!(jar.get(TOKEN_COOKIE_NAME).is_none());
-        assert!(jar.get(REFRESH_TOKEN_COOKIE_NAME).is_none());
+        // Both cookies should be set to empty with Max-Age=0, telling the
+        // browser to delete them.
+        let token = jar.get(TOKEN_COOKIE_NAME).expect("token cookie must be present for removal");
+        assert_eq!(token.value(), "");
+        assert_eq!(token.max_age(), Some(Duration::seconds(0)));
+
+        let refresh = jar.get(REFRESH_TOKEN_COOKIE_NAME).expect("refresh_token cookie must be present for removal");
+        assert_eq!(refresh.value(), "");
+        assert_eq!(refresh.max_age(), Some(Duration::seconds(0)));
     }
 }
