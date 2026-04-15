@@ -1,3 +1,4 @@
+use tracing::{error, info, instrument};
 use uuid::Uuid;
 
 use crate::user::repository::profile_repository::{
@@ -28,6 +29,7 @@ impl<R: ProfileRepositoryTrait> ProfileService<R> {
         Self { repository }
     }
 
+    #[instrument(skip(self, bio, avatar_url, social_handles, rates), fields(user_id = %user_id, username = %username))]
     pub async fn add_profile(
         &self,
         user_id: Uuid,
@@ -39,7 +41,12 @@ impl<R: ProfileRepositoryTrait> ProfileService<R> {
         social_handles: Vec<SocialHandleInput>,
         rates: Vec<RateInput>,
     ) -> Result<ProfileWithDetails, ProfileServiceError> {
-        Ok(self
+        info!(
+            social_handles_count = social_handles.len(),
+            rates_count = rates.len(),
+            "Creating profile with details"
+        );
+        let result = self
             .repository
             .create_with_details(
                 user_id,
@@ -51,7 +58,13 @@ impl<R: ProfileRepositoryTrait> ProfileService<R> {
                 social_handles,
                 rates,
             )
-            .await?)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to create profile");
+                ProfileServiceError::RepositoryError(e)
+            })?;
+        info!(profile_id = %result.profile.id, "Profile created successfully");
+        Ok(result)
     }
 }
 

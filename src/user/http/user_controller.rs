@@ -9,6 +9,7 @@ use axum_extra::TypedHeader;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::user::crypto::jwt::verify_jwt;
@@ -40,17 +41,20 @@ pub struct CreateUserRes {
     ),
     tag = "Users"
 )]
+#[instrument(skip_all)]
 pub async fn create_user(
     State(service): State<UserService<UserRepository>>,
     State(jwt_secret): State<String>,
     Json(payload): Json<CreateUserReq>,
 ) -> impl IntoResponse {
+    info!("Create user request received");
     let result = service.create(payload.email, payload.password).await;
 
     match result {
         Ok(user) => {
             let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
                 .map_err(|_| {
+                    error!(user_id = %user.id, "Failed to generate JWT for new user");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Failed to generate token",
@@ -60,6 +64,7 @@ pub async fn create_user(
 
             match token {
                 Ok(token) => {
+                    info!(user_id = %user.id, "User created successfully");
                     let res = CreateUserRes {
                         id: user.id,
                         email: user.email,
@@ -85,8 +90,14 @@ pub async fn create_user(
             RepositoryError::DieselError(DieselError::DatabaseError(
                 DatabaseErrorKind::UniqueViolation,
                 _,
-            )) => (StatusCode::CONFLICT, "User already exists").into_response(),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create user").into_response(),
+            )) => {
+                warn!("User creation failed: duplicate email");
+                (StatusCode::CONFLICT, "User already exists").into_response()
+            }
+            _ => {
+                error!(error = %err, "User creation failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create user").into_response()
+            }
         },
     }
 }
@@ -108,17 +119,20 @@ pub struct LoginUserReq {
     ),
     tag = "Users"
 )]
+#[instrument(skip_all)]
 pub async fn login_user(
     State(service): State<UserService<UserRepository>>,
     State(jwt_secret): State<String>,
     Json(payload): Json<LoginUserReq>,
 ) -> impl IntoResponse {
+    info!("Login request received");
     let result = service.authenticate(payload.email, payload.password).await;
 
     match result {
         Ok(user) => {
             let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
                 .map_err(|_| {
+                    error!(user_id = %user.id, "Failed to generate JWT during login");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Failed to generate token",
@@ -128,6 +142,7 @@ pub async fn login_user(
 
             match token {
                 Ok(token) => {
+                    info!(user_id = %user.id, "User logged in successfully");
                     let res = CreateUserRes {
                         id: user.id,
                         email: user.email,
@@ -151,9 +166,11 @@ pub async fn login_user(
         }
         Err(err) => match err {
             ServiceError::UserNotFound | ServiceError::InvalidCredentials => {
+                warn!("Login failed: invalid credentials");
                 (StatusCode::UNAUTHORIZED, "Invalid email or password").into_response()
             }
             ServiceError::RepositoryError(_) | ServiceError::HashError(_) => {
+                error!(error = %err, "Login failed due to internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
             }
         },
@@ -178,6 +195,7 @@ pub struct MeRes {
     security(("bearer_token" = [])),
     tag = "Users"
 )]
+#[instrument(skip_all)]
 pub async fn get_me(
     State(service): State<UserService<UserRepository>>,
     State(jwt_secret): State<String>,
@@ -186,20 +204,29 @@ pub async fn get_me(
     let claims = match verify_jwt(bearer.token(), &jwt_secret) {
         Ok(c) => c,
         Err(_) => {
+            warn!("Get me request with invalid or expired token");
             return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
         }
     };
 
+    info!(user_id = %claims.sub, "Get me request");
     match service.get_me(claims.sub).await {
-        Ok(user) => Json(MeRes {
-            id: user.id,
-            email: user.email,
-        })
-        .into_response(),
+        Ok(user) => {
+            info!(user_id = %user.id, "Get me successful");
+            Json(MeRes {
+                id: user.id,
+                email: user.email,
+            })
+            .into_response()
+        }
         Err(ServiceError::UserNotFound) => {
+            warn!(user_id = %claims.sub, "Get me: user not found");
             (StatusCode::NOT_FOUND, "User not found").into_response()
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user").into_response(),
+        Err(err) => {
+            error!(user_id = %claims.sub, error = %err, "Get me failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user").into_response()
+        }
     }
 }
 

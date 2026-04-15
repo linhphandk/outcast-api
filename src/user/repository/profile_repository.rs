@@ -7,6 +7,7 @@ use deadpool_diesel::postgres::Pool;
 use diesel::prelude::*;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Clone, Queryable)]
@@ -156,6 +157,7 @@ impl ProfileRepository {
 
 #[async_trait]
 impl ProfileRepositoryTrait for ProfileRepository {
+    #[instrument(skip(self, bio, avatar_url), fields(user_id = %user_id, username = %username))]
     async fn create(
         &self,
         user_id: Uuid,
@@ -165,7 +167,12 @@ impl ProfileRepositoryTrait for ProfileRepository {
         avatar_url: String,
         username: String,
     ) -> Result<Profile, ProfileRepositoryError> {
-        let conn = self.pool.get().await?;
+        info!("Creating profile");
+        debug!("Acquiring database connection from pool");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
 
         let inserted_profile = conn
             .interact(move |conn| {
@@ -182,11 +189,21 @@ impl ProfileRepositoryTrait for ProfileRepository {
                     .values(&new_profile)
                     .get_result::<Profile>(conn)
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error during profile creation");
+                ProfileRepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error during profile creation");
+                ProfileRepositoryError::DieselError(e)
+            })?;
 
+        info!(profile_id = %inserted_profile.id, "Profile created successfully");
         Ok(inserted_profile)
     }
 
+    #[instrument(skip(self, handle, url), fields(profile_id = %profile_id, platform = %platform))]
     async fn add_social_handle(
         &self,
         profile_id: Uuid,
@@ -195,7 +212,11 @@ impl ProfileRepositoryTrait for ProfileRepository {
         url: String,
         follower_count: i32,
     ) -> Result<SocialHandle, ProfileRepositoryError> {
-        let conn = self.pool.get().await?;
+        info!("Adding social handle");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
 
         let inserted = conn
             .interact(move |conn| {
@@ -211,18 +232,32 @@ impl ProfileRepositoryTrait for ProfileRepository {
                     .values(&new_handle)
                     .get_result::<SocialHandle>(conn)
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error adding social handle");
+                ProfileRepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error adding social handle");
+                ProfileRepositoryError::DieselError(e)
+            })?;
 
+        info!(social_handle_id = %inserted.id, "Social handle added successfully");
         Ok(inserted)
     }
 
+    #[instrument(skip(self, amount), fields(profile_id = %profile_id, rate_type = %rate_type))]
     async fn add_rate(
         &self,
         profile_id: Uuid,
         rate_type: String,
         amount: BigDecimal,
     ) -> Result<Rate, ProfileRepositoryError> {
-        let conn = self.pool.get().await?;
+        info!("Adding rate");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
 
         let inserted = conn
             .interact(move |conn| {
@@ -236,11 +271,21 @@ impl ProfileRepositoryTrait for ProfileRepository {
                     .values(&new_rate)
                     .get_result::<Rate>(conn)
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error adding rate");
+                ProfileRepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error adding rate");
+                ProfileRepositoryError::DieselError(e)
+            })?;
 
+        info!(rate_id = %inserted.id, "Rate added successfully");
         Ok(inserted)
     }
 
+    #[instrument(skip(self, bio, avatar_url, social_handle_inputs, rate_inputs), fields(user_id = %user_id, username = %username))]
     async fn create_with_details(
         &self,
         user_id: Uuid,
@@ -252,7 +297,15 @@ impl ProfileRepositoryTrait for ProfileRepository {
         social_handle_inputs: Vec<SocialHandleInput>,
         rate_inputs: Vec<RateInput>,
     ) -> Result<ProfileWithDetails, ProfileRepositoryError> {
-        let conn = self.pool.get().await?;
+        info!(
+            social_handles_count = social_handle_inputs.len(),
+            rates_count = rate_inputs.len(),
+            "Creating profile with details in transaction"
+        );
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
 
         let result = conn
             .interact(move |conn| {
@@ -302,8 +355,17 @@ impl ProfileRepositoryTrait for ProfileRepository {
                     })
                 })
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error during profile creation with details");
+                ProfileRepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Transaction error during profile creation with details");
+                ProfileRepositoryError::DieselError(e)
+            })?;
 
+        info!(profile_id = %result.profile.id, "Profile with details created successfully");
         Ok(result)
     }
 }

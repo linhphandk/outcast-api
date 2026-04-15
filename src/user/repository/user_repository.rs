@@ -116,8 +116,13 @@ impl UserRepositoryTrait for UserRepository {
         Ok(inserted_user)
     }
 
+    #[instrument(skip(self, email))]
     async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError> {
-        let conn = self.pool.get().await?;
+        debug!("Looking up user by email");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            RepositoryError::PoolError(e)
+        })?;
 
         let user = conn
             .interact(move |conn| {
@@ -126,13 +131,27 @@ impl UserRepositoryTrait for UserRepository {
                     .first::<User>(conn)
                     .optional()
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error during find_by_email");
+                RepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error during find_by_email");
+                RepositoryError::DieselError(e)
+            })?;
 
+        debug!(found = user.is_some(), "find_by_email result");
         Ok(user)
     }
 
+    #[instrument(skip(self), fields(user_id = %id))]
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepositoryError> {
-        let conn = self.pool.get().await?;
+        debug!("Looking up user by ID");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            RepositoryError::PoolError(e)
+        })?;
 
         let user = conn
             .interact(move |conn| {
@@ -141,8 +160,17 @@ impl UserRepositoryTrait for UserRepository {
                     .first::<User>(conn)
                     .optional()
             })
-            .await??;
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error during find_by_id");
+                RepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error during find_by_id");
+                RepositoryError::DieselError(e)
+            })?;
 
+        debug!(found = user.is_some(), "find_by_id result");
         Ok(user)
     }
 }

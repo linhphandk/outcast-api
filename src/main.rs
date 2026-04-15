@@ -15,6 +15,7 @@ use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use user::repository::user_repository::UserRepository;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 use uuid::Uuid;
@@ -172,6 +173,7 @@ async fn main() {
         .merge(crate::user::http::user_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
     info!("Server running at http://{}/", &config.listen);

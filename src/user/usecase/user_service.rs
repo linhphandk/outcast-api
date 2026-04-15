@@ -1,5 +1,6 @@
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,44 +34,60 @@ impl<R: UserRepositoryTrait> UserService<R> {
         Self { repository, pepper }
     }
 
+    #[instrument(skip_all)]
     pub async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
-        let hashed_password = hash_password(&password, &self.pepper).map_err(|_| {
+        debug!("Hashing password for new user");
+        let hashed_password = hash_password(&password, &self.pepper).map_err(|e| {
+            error!(error = %e, "Failed to hash password during user creation");
             RepositoryError::DieselError(diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::Unknown,
                 Box::new("Failed to hash password".to_string()),
             ))
         })?;
+        info!("Password hashed, creating user in repository");
         self.repository.create(email, hashed_password).await
     }
 
+    #[instrument(skip_all)]
     pub async fn authenticate(
         &self,
         email: String,
         password: String,
     ) -> Result<User, ServiceError> {
+        debug!("Authenticating user");
         let user = self
             .repository
             .find_by_email(email)
             .await
             .map_err(ServiceError::RepositoryError)?
-            .ok_or(ServiceError::UserNotFound)?;
+            .ok_or_else(|| {
+                warn!("Authentication failed: user not found");
+                ServiceError::UserNotFound
+            })?;
 
         let is_valid = verify_password(&password, &user.password, &self.pepper)
             .map_err(ServiceError::HashError)?;
 
         if !is_valid {
+            warn!(user_id = %user.id, "Authentication failed: invalid password");
             return Err(ServiceError::InvalidCredentials);
         }
 
+        info!(user_id = %user.id, "User authenticated successfully");
         Ok(user)
     }
 
+    #[instrument(skip(self), fields(user_id = %user_id))]
     pub async fn get_me(&self, user_id: Uuid) -> Result<User, ServiceError> {
+        debug!("Fetching user by ID");
         self.repository
             .find_by_id(user_id)
             .await
             .map_err(ServiceError::RepositoryError)?
-            .ok_or(ServiceError::UserNotFound)
+            .ok_or_else(|| {
+                warn!(user_id = %user_id, "User not found");
+                ServiceError::UserNotFound
+            })
     }
 }
 

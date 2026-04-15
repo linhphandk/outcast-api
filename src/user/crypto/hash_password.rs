@@ -1,6 +1,7 @@
 use bcrypt::{DEFAULT_COST, hash, verify};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use tracing::{debug, error, instrument};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -11,23 +12,36 @@ fn compute_hmac_pepper(password: &str, pepper: &str) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
+#[instrument(skip_all)]
 pub fn hash_password(password: &str, pepper: &str) -> Result<String, bcrypt::BcryptError> {
+    debug!("Hashing password with pepper and bcrypt");
     // 1. HMAC the password with the pepper to collapse it and "key" it
     let peppered_password = compute_hmac_pepper(password, pepper);
 
     // 2. Hash the resulting HMAC bytes with bcrypt (hex encoded)
     let input = hex::encode(peppered_password);
-    hash(input, DEFAULT_COST)
+    let result = hash(input, DEFAULT_COST);
+    if let Err(ref e) = result {
+        error!(error = %e, "bcrypt hash failed");
+    }
+    result
 }
 
+#[instrument(skip_all)]
 pub fn verify_password(
     password: &str,
     hashed_password: &str,
     pepper: &str,
 ) -> Result<bool, bcrypt::BcryptError> {
+    debug!("Verifying password");
     let peppered_password = compute_hmac_pepper(password, pepper);
     let input = hex::encode(peppered_password);
-    verify(input, hashed_password)
+    let result = verify(input, hashed_password);
+    match &result {
+        Ok(valid) => debug!(valid = %valid, "Password verification complete"),
+        Err(e) => error!(error = %e, "bcrypt verify failed"),
+    }
+    result
 }
 
 #[cfg(test)]
