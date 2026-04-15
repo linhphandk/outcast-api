@@ -304,7 +304,7 @@ mod tests {
         let session_repo: Arc<dyn SessionRepositoryTrait> =
             Arc::new(SessionRepository::new(pool.clone()));
         let session_user_repo: Arc<dyn UserRepositoryTrait> =
-            Arc::new(UserRepository::new(pool.clone()));
+            Arc::new(UserRepository::new(pool));
         let session_service = SessionService::new(session_repo.clone(), session_user_repo);
         let state = TestState {
             service,
