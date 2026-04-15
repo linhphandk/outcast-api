@@ -19,20 +19,8 @@ diesel::table! {
         id -> Uuid,
         profile_id -> Uuid,
         #[sql_name = "type"]
-        rate_type -> Text,
+        type_ -> Text,
         amount -> Numeric,
-    }
-}
-
-diesel::table! {
-    social_handles (id) {
-        id -> Uuid,
-        profile_id -> Uuid,
-        platform -> Text,
-        handle -> Text,
-        url -> Text,
-        follower_count -> Int4,
-        updated_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -49,6 +37,18 @@ diesel::table! {
         revoked_at -> Nullable<Timestamp>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    social_handles (id) {
+        id -> Uuid,
+        profile_id -> Uuid,
+        platform -> Text,
+        handle -> Text,
+        url -> Text,
+        follower_count -> Int4,
+        updated_at -> Nullable<Timestamptz>,
     }
 }
 

@@ -67,7 +67,7 @@ pub struct Rate {
 #[diesel(table_name = rates)]
 pub struct NewRate {
     pub profile_id: Uuid,
-    pub rate_type: String,
+    pub type_: String,
     pub amount: BigDecimal,
 }
 
@@ -263,7 +263,7 @@ impl ProfileRepositoryTrait for ProfileRepository {
             .interact(move |conn| {
                 let new_rate = NewRate {
                     profile_id,
-                    rate_type,
+                    type_:rate_type,
                     amount,
                 };
 
@@ -340,7 +340,7 @@ impl ProfileRepositoryTrait for ProfileRepository {
                         .into_iter()
                         .map(|input| NewRate {
                             profile_id: profile.id,
-                            rate_type: input.rate_type,
+                            type_: input.rate_type,
                             amount: input.amount,
                         })
                         .collect();
