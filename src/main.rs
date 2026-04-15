@@ -1,4 +1,5 @@
 pub mod schema;
+mod session;
 mod user;
 use tracing::info;
 use axum::{
@@ -13,6 +14,8 @@ use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
+use session::repository::session_repository::SessionRepository;
+use session::usecase::session_service::SessionService;
 use user::repository::user_repository::UserRepository;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -76,6 +79,7 @@ struct Event {
 pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
+    pub session_service: SessionService<SessionRepository>,
     pub jwt_secret: String,
 }
 
@@ -90,6 +94,12 @@ impl axum::extract::FromRef<AppState>
 {
     fn from_ref(state: &AppState) -> Self {
         state.user_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for SessionService<SessionRepository> {
+    fn from_ref(state: &AppState) -> Self {
+        state.session_service.clone()
     }
 }
 
@@ -155,15 +165,19 @@ async fn main() {
         .build()
         .unwrap();
 
-    let user_repository = UserRepository::new(diesel_pool);
+    let user_repository = UserRepository::new(diesel_pool.clone());
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
         config.password_pepper,
     );
 
+    let session_repository = SessionRepository::new(diesel_pool);
+    let session_service = SessionService::new(session_repository, config.jwt_secret.clone());
+
     let state = AppState {
         pool,
         user_service,
+        session_service,
         jwt_secret: config.jwt_secret,
     };
 
@@ -171,6 +185,7 @@ async fn main() {
         .route("/v1.0/event.list", get(event_list))
         .route("/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .merge(crate::user::http::user_controller::router())
+        .merge(crate::session::http::session_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

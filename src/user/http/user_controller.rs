@@ -5,14 +5,13 @@ use axum::{
     response::{AppendHeaders, IntoResponse},
     routing::{get, post},
 };
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::user::crypto::jwt::verify_jwt;
+use crate::session::repository::session_repository::SessionRepository;
+use crate::session::usecase::session_service::SessionService;
+use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::user_repository::{RepositoryError, UserRepository};
 use crate::user::usecase::user_service::{ServiceError, UserService};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
@@ -44,7 +43,7 @@ pub struct CreateUserRes {
 #[instrument(skip_all)]
 pub async fn create_user(
     State(service): State<UserService<UserRepository>>,
-    State(jwt_secret): State<String>,
+    State(session_service): State<SessionService<SessionRepository>>,
     Json(payload): Json<CreateUserReq>,
 ) -> impl IntoResponse {
     info!("Create user request received");
@@ -52,38 +51,46 @@ pub async fn create_user(
 
     match result {
         Ok(user) => {
-            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
-                .map_err(|_| {
-                    error!(user_id = %user.id, "Failed to generate JWT for new user");
+            let session_result = session_service
+                .create_session(user.id, &user.email, None, None)
+                .await;
+
+            match session_result {
+                Ok((access_token, refresh_token, _session)) => {
+                    info!(user_id = %user.id, "User created successfully");
+                    let res = CreateUserRes {
+                        id: user.id,
+                        email: user.email,
+                        token: access_token.clone(),
+                    };
+
+                    let access_cookie = format!(
+                        "token={}; HttpOnly; Path=/; Max-Age=900; SameSite=Lax",
+                        access_token
+                    );
+                    let refresh_cookie = format!(
+                        "refresh_token={}; HttpOnly; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
+                        refresh_token
+                    );
+
+                    (
+                        StatusCode::CREATED,
+                        AppendHeaders([
+                            (header::SET_COOKIE, access_cookie),
+                            (header::SET_COOKIE, refresh_cookie),
+                        ]),
+                        Json(res),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!(user_id = %user.id, error = %e, "Failed to create session for new user");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Failed to generate token",
                     )
                         .into_response()
-                });
-
-            match token {
-                Ok(token) => {
-                    info!(user_id = %user.id, "User created successfully");
-                    let res = CreateUserRes {
-                        id: user.id,
-                        email: user.email,
-                        token: token.clone(),
-                    };
-
-                    let cookie = format!(
-                        "token={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax",
-                        token
-                    );
-
-                    (
-                        StatusCode::CREATED,
-                        AppendHeaders([(header::SET_COOKIE, cookie)]),
-                        Json(res),
-                    )
-                        .into_response()
                 }
-                Err(res) => res,
             }
         }
         Err(err) => match err {
@@ -122,7 +129,7 @@ pub struct LoginUserReq {
 #[instrument(skip_all)]
 pub async fn login_user(
     State(service): State<UserService<UserRepository>>,
-    State(jwt_secret): State<String>,
+    State(session_service): State<SessionService<SessionRepository>>,
     Json(payload): Json<LoginUserReq>,
 ) -> impl IntoResponse {
     info!("Login request received");
@@ -130,38 +137,46 @@ pub async fn login_user(
 
     match result {
         Ok(user) => {
-            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
-                .map_err(|_| {
-                    error!(user_id = %user.id, "Failed to generate JWT during login");
+            let session_result = session_service
+                .create_session(user.id, &user.email, None, None)
+                .await;
+
+            match session_result {
+                Ok((access_token, refresh_token, _session)) => {
+                    info!(user_id = %user.id, "User logged in successfully");
+                    let res = CreateUserRes {
+                        id: user.id,
+                        email: user.email,
+                        token: access_token.clone(),
+                    };
+
+                    let access_cookie = format!(
+                        "token={}; HttpOnly; Path=/; Max-Age=900; SameSite=Lax",
+                        access_token
+                    );
+                    let refresh_cookie = format!(
+                        "refresh_token={}; HttpOnly; Path=/auth/refresh; Max-Age=2592000; SameSite=Strict",
+                        refresh_token
+                    );
+
+                    (
+                        StatusCode::OK,
+                        AppendHeaders([
+                            (header::SET_COOKIE, access_cookie),
+                            (header::SET_COOKIE, refresh_cookie),
+                        ]),
+                        Json(res),
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!(user_id = %user.id, error = %e, "Failed to create session during login");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Failed to generate token",
                     )
                         .into_response()
-                });
-
-            match token {
-                Ok(token) => {
-                    info!(user_id = %user.id, "User logged in successfully");
-                    let res = CreateUserRes {
-                        id: user.id,
-                        email: user.email,
-                        token: token.clone(),
-                    };
-
-                    let cookie = format!(
-                        "token={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax",
-                        token
-                    );
-
-                    (
-                        StatusCode::OK,
-                        AppendHeaders([(header::SET_COOKIE, cookie)]),
-                        Json(res),
-                    )
-                        .into_response()
                 }
-                Err(res) => res,
             }
         }
         Err(err) => match err {
@@ -198,19 +213,10 @@ pub struct MeRes {
 #[instrument(skip_all)]
 pub async fn get_me(
     State(service): State<UserService<UserRepository>>,
-    State(jwt_secret): State<String>,
-    TypedHeader(bearer): TypedHeader<Authorization<Bearer>>,
+    auth_user: AuthUser,
 ) -> impl IntoResponse {
-    let claims = match verify_jwt(bearer.token(), &jwt_secret) {
-        Ok(c) => c,
-        Err(_) => {
-            warn!("Get me request with invalid or expired token");
-            return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
-        }
-    };
-
-    info!(user_id = %claims.sub, "Get me request");
-    match service.get_me(claims.sub).await {
+    info!(user_id = %auth_user.user_id, "Get me request");
+    match service.get_me(auth_user.user_id).await {
         Ok(user) => {
             info!(user_id = %user.id, "Get me successful");
             Json(MeRes {
@@ -220,11 +226,11 @@ pub async fn get_me(
             .into_response()
         }
         Err(ServiceError::UserNotFound) => {
-            warn!(user_id = %claims.sub, "Get me: user not found");
+            warn!(user_id = %auth_user.user_id, "Get me: user not found");
             (StatusCode::NOT_FOUND, "User not found").into_response()
         }
         Err(err) => {
-            error!(user_id = %claims.sub, error = %err, "Get me failed");
+            error!(user_id = %auth_user.user_id, error = %err, "Get me failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user").into_response()
         }
     }
@@ -233,6 +239,7 @@ pub async fn get_me(
 pub fn router<S>() -> Router<S>
 where
     UserService<UserRepository>: axum::extract::FromRef<S>,
+    SessionService<SessionRepository>: axum::extract::FromRef<S>,
     String: axum::extract::FromRef<S>,
     S: Clone + Send + Sync + 'static,
 {
@@ -246,6 +253,8 @@ where
 mod tests {
     use super::*;
     use crate::ApiDoc;
+    use crate::session::repository::session_repository::SessionRepository;
+    use crate::session::usecase::session_service::SessionService;
     use crate::user::crypto::jwt::verify_jwt;
     use axum::body::Body;
     use axum::http::Request;
@@ -287,12 +296,19 @@ mod tests {
     #[derive(Clone)]
     struct TestState {
         service: UserService<UserRepository>,
+        session_service: SessionService<SessionRepository>,
         jwt_secret: String,
     }
 
     impl axum::extract::FromRef<TestState> for UserService<UserRepository> {
         fn from_ref(state: &TestState) -> Self {
             state.service.clone()
+        }
+    }
+
+    impl axum::extract::FromRef<TestState> for SessionService<SessionRepository> {
+        fn from_ref(state: &TestState) -> Self {
+            state.session_service.clone()
         }
     }
 
@@ -303,10 +319,13 @@ mod tests {
     }
 
     fn build_app(pool: deadpool_diesel::postgres::Pool) -> Router {
-        let repo = UserRepository::new(pool);
+        let repo = UserRepository::new(pool.clone());
         let service = UserService::new(repo, "test_pepper".to_string());
+        let session_repo = SessionRepository::new(pool);
+        let session_service = SessionService::new(session_repo, "test_jwt_secret".to_string());
         let state = TestState {
             service,
+            session_service,
             jwt_secret: "test_jwt_secret".to_string(),
         };
         Router::new()
@@ -603,7 +622,7 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

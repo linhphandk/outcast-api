@@ -6,27 +6,30 @@ use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: Uuid,     // Subject (user_id)
-    pub email: String, // User email
-    pub exp: usize,    // Expiration time (as timestamp)
-    pub iat: usize,    // Issued at
+    pub sub: Uuid,        // Subject (user_id)
+    pub email: String,    // User email
+    pub session_id: Uuid, // Session ID for revocation
+    pub exp: usize,       // Expiration time (as timestamp)
+    pub iat: usize,       // Issued at
 }
 
 #[instrument(skip(secret), fields(user_id = %user_id))]
 pub fn create_jwt(
     user_id: Uuid,
     email: &str,
+    session_id: Uuid,
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     debug!("Creating JWT");
     let expiration = Utc::now()
-        .checked_add_signed(Duration::hours(24))
+        .checked_add_signed(Duration::minutes(15))
         .expect("valid timestamp")
         .timestamp();
 
     let claims = Claims {
         sub: user_id,
         email: email.to_owned(),
+        session_id,
         exp: expiration as usize,
         iat: Utc::now().timestamp() as usize,
     };
