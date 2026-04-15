@@ -129,7 +129,7 @@ impl UserRepositoryTrait for UserRepository {
 }
 
 // Fake implementation (tests only)
-impl UserRepositoryTrait for MockUserRepository {
+impl UserRepositoryTrait for MockUserRepositoryTrait {
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError> {
         Ok(User { id: Uuid::new_v4(), email, password }) // return fake data
     }
@@ -334,7 +334,7 @@ outcast-api/
 | id          UUID |  | id           UUID                   |
 | user_id  -> UUID |  | user_id   -> UUID (-> users.id)     |
 | refresh_token    |  | name, bio, niche, avatar_url        |
-| user_agent  TEXT |  | username     CITEXT (case-insensitive unique)
+| user_agent  TEXT |  | username     CITEXT (case-insensitive unique) |
 | ip_address  TEXT |  | updated_at, created_at TIMESTAMPTZ  |
 | expires_at  TIME |  +----------------+--------------------+
 | revoked_at  TIME |                   | 1
@@ -986,7 +986,7 @@ cargo test user::usecase::user_service::tests
 
 | Tool | Install |
 |------|---------|
-| Rust | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Rust | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
 | Docker Desktop | https://www.docker.com/products/docker-desktop |
 | Diesel CLI | `cargo install diesel_cli --no-default-features --features postgres` |
 
