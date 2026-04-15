@@ -422,7 +422,7 @@ mod tests {
                     .unwrap();
 
                 let session_id = Uuid::new_v4();
-                let refresh_token = hex::encode(vec![0u8; 64]);
+                let refresh_token = hex::encode(session_id.as_bytes());
                 let expires_at =
                     chrono::Utc::now().naive_utc() + chrono::Duration::days(7);
                 diesel::insert_into(sessions::table)
