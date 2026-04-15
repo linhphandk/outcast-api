@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use user::repository::user_repository::UserRepository;
 use session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
+use session::usecase::session_service::SessionService;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -81,6 +82,7 @@ pub struct AppState {
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
     pub jwt_secret: String,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
+    pub session_service: SessionService,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -100,6 +102,12 @@ impl axum::extract::FromRef<AppState>
 impl axum::extract::FromRef<AppState> for Arc<dyn SessionRepositoryTrait> {
     fn from_ref(state: &AppState) -> Self {
         state.session_repository.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for SessionService {
+    fn from_ref(state: &AppState) -> Self {
+        state.session_service.clone()
     }
 }
 
@@ -168,6 +176,7 @@ async fn main() {
     let user_repository = UserRepository::new(diesel_pool.clone());
     let session_repository: Arc<dyn SessionRepositoryTrait> =
         Arc::new(SessionRepository::new(diesel_pool));
+    let session_service = SessionService::new(session_repository.clone());
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
         config.password_pepper,
@@ -178,12 +187,14 @@ async fn main() {
         user_service,
         jwt_secret: config.jwt_secret,
         session_repository,
+        session_service,
     };
 
     let app = Router::new()
         .route("/v1.0/event.list", get(event_list))
         .route("/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .merge(crate::user::http::user_controller::router())
+        .merge(crate::session::http::session_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
