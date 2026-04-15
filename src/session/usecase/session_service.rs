@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use rand::RngCore;
 use tracing::{error, info, instrument, warn};
+use uuid::Uuid;
 
 use crate::session::repository::session_repository::{SessionRepositoryError, SessionRepositoryTrait};
 use crate::user::repository::user_repository::{RepositoryError, UserRepositoryTrait};
@@ -48,6 +49,35 @@ impl SessionService {
             repository,
             user_repository,
         }
+    }
+
+    #[instrument(skip_all)]
+    pub async fn create_session(
+        &self,
+        user_id: Uuid,
+        email: &str,
+        user_agent: Option<String>,
+        ip_address: Option<String>,
+        jwt_secret: &str,
+    ) -> Result<RefreshTokens, SessionServiceError> {
+        let refresh_token = generate_refresh_token();
+        let now = chrono::Utc::now().naive_utc();
+        let expires_at = now + chrono::Duration::seconds(REFRESH_COOKIE_MAX_AGE_SECS);
+
+        let session = self
+            .repository
+            .create(user_id, &refresh_token, user_agent, ip_address, expires_at)
+            .await?;
+
+        let access_token =
+            crate::user::crypto::jwt::create_jwt(user_id, email, session.id, jwt_secret)?;
+
+        info!(session_id = %session.id, user_id = %user_id, "Session created");
+
+        Ok(RefreshTokens {
+            access_token,
+            refresh_token,
+        })
     }
 
     #[instrument(skip_all)]
