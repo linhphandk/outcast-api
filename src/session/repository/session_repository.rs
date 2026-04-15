@@ -173,7 +173,7 @@ impl SessionRepositoryTrait for SessionRepository {
         let session = conn
             .interact(move |conn| {
                 sessions::table
-                    .filter(sessions::refresh_token.eq(&token))
+                    .filter(sessions::refresh_token.eq(token))
                     .first::<Session>(conn)
                     .optional()
             })
@@ -203,7 +203,7 @@ impl SessionRepositoryTrait for SessionRepository {
         let session = conn
             .interact(move |conn| {
                 sessions::table
-                    .filter(sessions::id.eq(&id))
+                    .filter(sessions::id.eq(id))
                     .first::<Session>(conn)
                     .optional()
             })
@@ -236,7 +236,7 @@ impl SessionRepositoryTrait for SessionRepository {
         let sessions_list = conn
             .interact(move |conn| {
                 sessions::table
-                    .filter(sessions::user_id.eq(&user_id))
+                    .filter(sessions::user_id.eq(user_id))
                     .load::<Session>(conn)
             })
             .await
@@ -265,7 +265,7 @@ impl SessionRepositoryTrait for SessionRepository {
         let now = chrono::Utc::now().naive_utc();
         let session = conn
             .interact(move |conn| {
-                diesel::update(sessions::table.filter(sessions::id.eq(&id)))
+                diesel::update(sessions::table.filter(sessions::id.eq(id)))
                     .set(&UpdateSession {
                         revoked_at: Some(now),
                         updated_at: now,
@@ -296,7 +296,7 @@ impl SessionRepositoryTrait for SessionRepository {
         })?;
 
         conn.interact(move |conn| {
-            diesel::delete(sessions::table.filter(sessions::id.eq(&id))).execute(conn)
+            diesel::delete(sessions::table.filter(sessions::id.eq(id))).execute(conn)
         })
         .await
         .map_err(|e| {
@@ -323,7 +323,7 @@ impl SessionRepositoryTrait for SessionRepository {
 
         let count = conn
             .interact(move |conn| {
-                diesel::delete(sessions::table.filter(sessions::user_id.eq(&user_id)))
+                diesel::delete(sessions::table.filter(sessions::user_id.eq(user_id)))
                     .execute(conn)
             })
             .await
@@ -380,14 +380,19 @@ mod tests {
     }
 
     async fn create_test_user(pool: &Pool) -> Uuid {
+        use crate::schema::users;
+
         let user_id = Uuid::new_v4();
+        let email = format!("test{}@example.com", user_id);
         let conn = pool.get().await.unwrap();
         conn.interact(move |conn| {
-            diesel::sql_query(format!(
-                "INSERT INTO users (id, email, password) VALUES ('{}', 'test{}@example.com', 'hash')",
-                user_id, user_id
-            ))
-            .execute(conn)
+            diesel::insert_into(users::table)
+                .values((
+                    users::id.eq(user_id),
+                    users::email.eq(email),
+                    users::password.eq("hash"),
+                ))
+                .execute(conn)
         })
         .await
         .unwrap()
