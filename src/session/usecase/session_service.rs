@@ -4,7 +4,7 @@ use rand::RngCore;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::session::repository::session_repository::{SessionRepositoryError, SessionRepositoryTrait};
+use crate::session::repository::session_repository::{SessionRepositoryError, Session, SessionRepositoryTrait};
 use crate::user::repository::user_repository::{RepositoryError, UserRepositoryTrait};
 
 pub const TOKEN_COOKIE_MAX_AGE_SECS: i64 = 900;
@@ -176,7 +176,7 @@ impl SessionService {
     pub async fn list_sessions(
         &self,
         user_id: Uuid,
-    ) -> Result<Vec<crate::session::repository::session_repository::Session>, SessionServiceError>
+    ) -> Result<Vec<Session>, SessionServiceError>
     {
         let sessions = self.repository.find_all_by_user_id(user_id).await?;
         let now = chrono::Utc::now().naive_utc();
