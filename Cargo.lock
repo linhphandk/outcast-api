@@ -1886,6 +1886,7 @@ dependencies = [
  "bigdecimal",
  "chrono",
  "config",
+ "cookie",
  "deadpool-diesel",
  "deadpool-postgres",
  "diesel",
