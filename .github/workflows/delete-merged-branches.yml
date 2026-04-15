@@ -26,7 +26,7 @@ jobs:
             | grep -v 'origin/main' \
             | grep -v 'HEAD' \
             | sed 's|  origin/||' \
-            | while read branch; do
+            | while read -r branch; do
               echo "Deleting merged branch: $branch"
               gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${branch}" \
                 && echo "Deleted: $branch" \
