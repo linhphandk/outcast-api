@@ -51,7 +51,7 @@ mod tests {
         let jar = set_auth_cookies(jar, "access123".to_owned(), "refresh456".to_owned(), true);
 
         let token = jar.get("token").expect("token cookie should be present");
-        assert!(token.http_only());
+        assert_eq!(token.http_only(), Some(true));
         assert_eq!(token.same_site(), Some(SameSite::Strict));
         assert_eq!(token.path(), Some("/"));
         assert_eq!(token.secure(), Some(true));
@@ -63,7 +63,7 @@ mod tests {
         let refresh = jar
             .get("refresh_token")
             .expect("refresh_token cookie should be present");
-        assert!(refresh.http_only());
+        assert_eq!(refresh.http_only(), Some(true));
         assert_eq!(refresh.same_site(), Some(SameSite::Strict));
         assert_eq!(refresh.path(), Some("/auth/refresh"));
         assert_eq!(refresh.secure(), Some(true));
