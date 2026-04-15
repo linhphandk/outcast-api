@@ -13,11 +13,27 @@ use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::session::repository::session_repository::{Session, SessionRepositoryTrait};
-use crate::session::usecase::session_service::{SessionService, SessionServiceError};
+use crate::session::usecase::session_service::{
+    SessionService, SessionServiceError, REFRESH_COOKIE_MAX_AGE_SECS, TOKEN_COOKIE_MAX_AGE_SECS,
+};
 use crate::user::crypto::jwt::create_jwt;
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::user_repository::UserRepository;
 use crate::user::usecase::user_service::UserService;
+
+fn make_token_cookie(token: &str) -> String {
+    format!(
+        "token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
+        token, TOKEN_COOKIE_MAX_AGE_SECS
+    )
+}
+
+fn make_refresh_cookie(refresh_token: &str) -> String {
+    format!(
+        "refresh_token={}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={}",
+        refresh_token, REFRESH_COOKIE_MAX_AGE_SECS
+    )
+}
 
 #[derive(Serialize)]
 pub struct SessionRes {
@@ -119,21 +135,11 @@ pub async fn refresh(
 
     info!(user_id = %user.id, session_id = %new_session.id, "Session refreshed successfully");
 
-    let token_cookie = format!(
-        "token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=900",
-        token
-    );
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={}",
-        new_session.refresh_token,
-        7 * 24 * 3600
-    );
-
     (
         StatusCode::OK,
         AppendHeaders([
-            (header::SET_COOKIE, token_cookie),
-            (header::SET_COOKIE, refresh_cookie),
+            (header::SET_COOKIE, make_token_cookie(&token)),
+            (header::SET_COOKIE, make_refresh_cookie(&new_session.refresh_token)),
         ]),
         Json(RefreshRes { token }),
     )

@@ -12,7 +12,9 @@ use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::session::repository::session_repository::SessionRepositoryTrait;
-use crate::session::usecase::session_service::SessionService;
+use crate::session::usecase::session_service::{
+    SessionService, REFRESH_COOKIE_MAX_AGE_SECS, TOKEN_COOKIE_MAX_AGE_SECS,
+};
 use crate::user::crypto::jwt::create_jwt;
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::user_repository::{RepositoryError, UserRepository};
@@ -89,12 +91,13 @@ pub async fn create_user(
                 token: token.clone(),
             };
 
-            let token_cookie =
-                format!("token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=900", token);
+            let token_cookie = format!(
+                "token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
+                token, TOKEN_COOKIE_MAX_AGE_SECS
+            );
             let refresh_cookie = format!(
                 "refresh_token={}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={}",
-                session.refresh_token,
-                7 * 24 * 3600
+                session.refresh_token, REFRESH_COOKIE_MAX_AGE_SECS
             );
 
             (
@@ -186,12 +189,13 @@ pub async fn login_user(
                 token: token.clone(),
             };
 
-            let token_cookie =
-                format!("token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age=900", token);
+            let token_cookie = format!(
+                "token={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
+                token, TOKEN_COOKIE_MAX_AGE_SECS
+            );
             let refresh_cookie = format!(
                 "refresh_token={}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={}",
-                session.refresh_token,
-                7 * 24 * 3600
+                session.refresh_token, REFRESH_COOKIE_MAX_AGE_SECS
             );
 
             (

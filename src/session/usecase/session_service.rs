@@ -28,8 +28,15 @@ fn generate_refresh_token() -> String {
     hex::encode(bytes)
 }
 
+/// Access-token cookie max-age (15 minutes, matching JWT expiry).
+pub const TOKEN_COOKIE_MAX_AGE_SECS: u32 = 900;
+
+/// Refresh-token cookie max-age (7 days).
+pub const REFRESH_COOKIE_MAX_AGE_SECS: u32 = 7 * 24 * 3600;
+
 fn session_expires_at() -> NaiveDateTime {
-    chrono::Utc::now().naive_utc() + chrono::Duration::days(7)
+    chrono::Utc::now().naive_utc()
+        + chrono::Duration::seconds(REFRESH_COOKIE_MAX_AGE_SECS as i64)
 }
 
 #[derive(Clone)]
