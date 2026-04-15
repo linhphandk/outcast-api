@@ -6,6 +6,7 @@ pub async fn refresh_session() -> impl IntoResponse {
     StatusCode::NOT_IMPLEMENTED
 }
 
+
 pub async fn logout() -> impl IntoResponse {
     StatusCode::NOT_IMPLEMENTED
 }
@@ -13,6 +14,7 @@ pub async fn logout() -> impl IntoResponse {
 pub async fn logout_all() -> impl IntoResponse {
     StatusCode::NOT_IMPLEMENTED
 }
+
 
 pub async fn list_sessions() -> impl IntoResponse {
     StatusCode::NOT_IMPLEMENTED
