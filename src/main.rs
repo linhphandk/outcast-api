@@ -14,7 +14,9 @@ use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use user::repository::user_repository::UserRepository;
+use session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -78,6 +80,7 @@ pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
     pub jwt_secret: String,
+    pub session_repository: Arc<dyn SessionRepositoryTrait>,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -91,6 +94,12 @@ impl axum::extract::FromRef<AppState>
 {
     fn from_ref(state: &AppState) -> Self {
         state.user_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for Arc<dyn SessionRepositoryTrait> {
+    fn from_ref(state: &AppState) -> Self {
+        state.session_repository.clone()
     }
 }
 
@@ -156,7 +165,9 @@ async fn main() {
         .build()
         .unwrap();
 
-    let user_repository = UserRepository::new(diesel_pool);
+    let user_repository = UserRepository::new(diesel_pool.clone());
+    let session_repository: Arc<dyn SessionRepositoryTrait> =
+        Arc::new(SessionRepository::new(diesel_pool));
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
         config.password_pepper,
@@ -166,6 +177,7 @@ async fn main() {
         pool,
         user_service,
         jwt_secret: config.jwt_secret,
+        session_repository,
     };
 
     let app = Router::new()
