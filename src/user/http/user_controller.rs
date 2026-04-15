@@ -52,7 +52,7 @@ pub async fn create_user(
 
     match result {
         Ok(user) => {
-            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
+            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, Uuid::nil(), &jwt_secret)
                 .map_err(|_| {
                     error!(user_id = %user.id, "Failed to generate JWT for new user");
                     (
@@ -130,7 +130,7 @@ pub async fn login_user(
 
     match result {
         Ok(user) => {
-            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, &jwt_secret)
+            let token = crate::user::crypto::jwt::create_jwt(user.id, &user.email, Uuid::nil(), &jwt_secret)
                 .map_err(|_| {
                     error!(user_id = %user.id, "Failed to generate JWT during login");
                     (
