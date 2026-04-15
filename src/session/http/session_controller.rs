@@ -21,7 +21,7 @@ pub async fn refresh_session(
         Some(c) => c.value().to_owned(),
         None => {
             warn!("Refresh attempted without refresh_token cookie");
-            return (StatusCode::UNAUTHORIZED, "Missing refresh token").into_response();
+            return (StatusCode::UNAUTHORIZED, "Invalid or expired refresh token").into_response();
         }
     };
 
