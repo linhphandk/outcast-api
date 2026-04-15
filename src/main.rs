@@ -15,7 +15,7 @@ use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use user::repository::user_repository::UserRepository;
+use user::repository::user_repository::{UserRepository, UserRepositoryTrait};
 use session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
 use session::usecase::session_service::SessionService;
 use tower_http::cors::CorsLayer;
@@ -175,8 +175,10 @@ async fn main() {
 
     let user_repository = UserRepository::new(diesel_pool.clone());
     let session_repository: Arc<dyn SessionRepositoryTrait> =
-        Arc::new(SessionRepository::new(diesel_pool));
-    let session_service = SessionService::new(session_repository.clone());
+        Arc::new(SessionRepository::new(diesel_pool.clone()));
+    let session_user_repository: Arc<dyn UserRepositoryTrait> =
+        Arc::new(UserRepository::new(diesel_pool));
+    let session_service = SessionService::new(session_repository.clone(), session_user_repository);
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
         config.password_pepper,

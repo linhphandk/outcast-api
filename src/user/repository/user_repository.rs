@@ -40,7 +40,7 @@ pub struct UserRepository {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait UserRepositoryTrait {
+pub trait UserRepositoryTrait: Send + Sync {
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError>;
     async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepositoryError>;
