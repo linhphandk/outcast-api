@@ -154,6 +154,58 @@ impl SessionService {
             refresh_token: new_refresh_token,
         })
     }
+
+    /// Revokes the caller's current session (logout).
+    #[instrument(skip_all, fields(session_id = %session_id))]
+    pub async fn logout(&self, session_id: Uuid) -> Result<(), SessionServiceError> {
+        self.repository.revoke(session_id).await?;
+        info!(session_id = %session_id, "Session logged out");
+        Ok(())
+    }
+
+    /// Deletes all sessions belonging to a user (logout-all).
+    #[instrument(skip_all, fields(user_id = %user_id))]
+    pub async fn logout_all(&self, user_id: Uuid) -> Result<(), SessionServiceError> {
+        self.repository.delete_all_by_user_id(user_id).await?;
+        info!(user_id = %user_id, "All sessions deleted for user");
+        Ok(())
+    }
+
+    /// Returns all active (non-revoked, non-expired) sessions for a user.
+    #[instrument(skip_all, fields(user_id = %user_id))]
+    pub async fn list_sessions(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<crate::session::repository::session_repository::Session>, SessionServiceError>
+    {
+        let sessions = self.repository.find_all_by_user_id(user_id).await?;
+        let now = chrono::Utc::now().naive_utc();
+        let active: Vec<_> = sessions
+            .into_iter()
+            .filter(|s| s.revoked_at.is_none() && s.expires_at > now)
+            .collect();
+        Ok(active)
+    }
+
+    /// Deletes a single session by id, only if it belongs to `user_id`.
+    /// Returns `NotFound` if the session doesn't exist or belongs to another user.
+    #[instrument(skip_all, fields(session_id = %session_id, user_id = %user_id))]
+    pub async fn delete_session(
+        &self,
+        session_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<(), SessionServiceError> {
+        let session = self
+            .repository
+            .find_by_id(session_id)
+            .await?
+            .filter(|s| s.user_id == user_id)
+            .ok_or(SessionServiceError::NotFound)?;
+
+        self.repository.delete(session.id).await?;
+        info!(session_id = %session_id, "Session deleted");
+        Ok(())
+    }
 }
 
 fn generate_refresh_token() -> String {
