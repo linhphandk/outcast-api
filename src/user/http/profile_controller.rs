@@ -158,6 +158,8 @@ mod tests {
     use tower::ServiceExt;
 
     pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    const TEST_PEPPER: &str = "test_pepper";
+    const TEST_JWT_SECRET: &str = "test_jwt_secret";
 
     async fn setup_test_db() -> (
         testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
@@ -235,11 +237,11 @@ mod tests {
         let session_service = SessionService::new(session_repo.clone(), session_user_repository);
 
         let state = TestState {
-            user_service: UserService::new(user_repository, "test_pepper".to_string()),
+            user_service: UserService::new(user_repository, TEST_PEPPER.to_string()),
             profile_service: ProfileService::new(profile_repository),
             session_service,
             session_repo,
-            jwt_secret: "test_jwt_secret".to_string(),
+            jwt_secret: TEST_JWT_SECRET.to_string(),
         };
 
         Router::new()
@@ -248,7 +250,7 @@ mod tests {
             .with_state(state)
     }
 
-    async fn create_user(app: Router, email: &str) -> CreateUserRes {
+    async fn create_user(app: &Router, email: &str) -> CreateUserRes {
         let request = Request::builder()
             .method("POST")
             .uri("/user")
@@ -262,7 +264,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice::<CreateUserRes>(&body).unwrap()
@@ -272,7 +274,7 @@ mod tests {
     async fn test_get_my_profile_success() {
         let (_container, pool) = setup_test_db().await;
         let app = build_app(pool.clone());
-        let created = create_user(app, "profile_get_ok@example.com").await;
+        let created = create_user(&app, "profile_get_ok@example.com").await;
 
         let profile_repo = ProfileRepository::new(pool.clone());
         profile_repo
@@ -287,7 +289,6 @@ mod tests {
             .await
             .unwrap();
 
-        let app = build_app(pool.clone());
         let request = Request::builder()
             .method("GET")
             .uri("/user/profile")
@@ -295,7 +296,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let res: CreatorProfileRes = serde_json::from_slice(&body).unwrap();
@@ -323,9 +324,7 @@ mod tests {
     async fn test_get_my_profile_not_found() {
         let (_container, pool) = setup_test_db().await;
         let app = build_app(pool.clone());
-        let created = create_user(app, "profile_get_404@example.com").await;
-
-        let app = build_app(pool);
+        let created = create_user(&app, "profile_get_404@example.com").await;
         let request = Request::builder()
             .method("GET")
             .uri("/user/profile")
@@ -333,7 +332,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -341,7 +340,7 @@ mod tests {
     async fn test_update_my_profile_success() {
         let (_container, pool) = setup_test_db().await;
         let app = build_app(pool.clone());
-        let created = create_user(app, "profile_update_ok@example.com").await;
+        let created = create_user(&app, "profile_update_ok@example.com").await;
 
         let profile_repo = ProfileRepository::new(pool.clone());
         profile_repo
@@ -356,7 +355,6 @@ mod tests {
             .await
             .unwrap();
 
-        let app = build_app(pool);
         let request = Request::builder()
             .method("PUT")
             .uri("/user/profile")
@@ -374,7 +372,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let res: CreatorProfileRes = serde_json::from_slice(&body).unwrap();
@@ -387,9 +385,7 @@ mod tests {
     async fn test_update_my_profile_not_found() {
         let (_container, pool) = setup_test_db().await;
         let app = build_app(pool.clone());
-        let created = create_user(app, "profile_update_404@example.com").await;
-
-        let app = build_app(pool);
+        let created = create_user(&app, "profile_update_404@example.com").await;
         let request = Request::builder()
             .method("PUT")
             .uri("/user/profile")
@@ -407,7 +403,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
