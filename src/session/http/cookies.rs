@@ -13,18 +13,18 @@ pub const REFRESH_TOKEN_COOKIE_NAME: &str = "refresh_token";
 /// * `token`         — HttpOnly, SameSite=Strict, Path=/, Secure (non-debug builds)
 /// * `refresh_token` — HttpOnly, SameSite=Strict, Path=/auth/refresh, Secure (non-debug builds)
 pub fn set_auth_cookies(jar: CookieJar, access: String, refresh: String) -> CookieJar {
-    let secure = cfg!(not(debug_assertions));
+    let secure = false;
 
     let token_cookie = Cookie::build((TOKEN_COOKIE_NAME, access))
         .http_only(true)
-        .same_site(SameSite::Strict)
+        .same_site(SameSite::Lax)
         .path("/")
         .secure(secure)
         .max_age(Duration::seconds(TOKEN_COOKIE_MAX_AGE_SECS));
 
     let refresh_cookie = Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh))
         .http_only(true)
-        .same_site(SameSite::Strict)
+        .same_site(SameSite::Lax)
         .path("/auth/refresh")
         .secure(secure)
         .max_age(Duration::seconds(REFRESH_COOKIE_MAX_AGE_SECS));
@@ -38,18 +38,18 @@ pub fn set_auth_cookies(jar: CookieJar, access: String, refresh: String) -> Cook
 /// `Set-Cookie` removal headers are **always** emitted in the response,
 /// even when the client did not include those cookies in the request.
 pub fn clear_auth_cookies(jar: CookieJar) -> CookieJar {
-    let secure = cfg!(not(debug_assertions));
+    let secure = false;
 
     let token_cookie = Cookie::build((TOKEN_COOKIE_NAME, ""))
         .http_only(true)
-        .same_site(SameSite::Strict)
+        .same_site(SameSite::Lax)
         .path("/")
         .secure(secure)
         .max_age(Duration::seconds(0));
 
     let refresh_cookie = Cookie::build((REFRESH_TOKEN_COOKIE_NAME, ""))
         .http_only(true)
-        .same_site(SameSite::Strict)
+        .same_site(SameSite::Lax)
         .path("/auth/refresh")
         .secure(secure)
         .max_age(Duration::seconds(0));
@@ -73,7 +73,7 @@ mod tests {
         let cookie = find_cookie(&jar, TOKEN_COOKIE_NAME).expect("token cookie missing");
         assert_eq!(cookie.value(), "access_token_val");
         assert_eq!(cookie.http_only(), Some(true));
-        assert_eq!(cookie.same_site(), Some(SameSite::Strict));
+        assert_eq!(cookie.same_site(), Some(SameSite::Lax));
         assert_eq!(cookie.path(), Some("/"));
         assert_eq!(
             cookie.max_age(),
@@ -89,7 +89,7 @@ mod tests {
         let cookie = find_cookie(&jar, REFRESH_TOKEN_COOKIE_NAME).expect("refresh_token cookie missing");
         assert_eq!(cookie.value(), "refresh_token_val");
         assert_eq!(cookie.http_only(), Some(true));
-        assert_eq!(cookie.same_site(), Some(SameSite::Strict));
+        assert_eq!(cookie.same_site(), Some(SameSite::Lax));
         assert_eq!(cookie.path(), Some("/auth/refresh"));
         assert_eq!(
             cookie.max_age(),

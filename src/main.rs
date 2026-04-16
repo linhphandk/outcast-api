@@ -18,7 +18,8 @@ use std::sync::Arc;
 use user::repository::user_repository::{UserRepository, UserRepositoryTrait};
 use session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
 use session::usecase::session_service::SessionService;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+use axum::http::{HeaderValue, Method, header};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
@@ -198,7 +199,13 @@ async fn main() {
         .merge(crate::user::http::user_controller::router())
         .merge(crate::session::http::session_controller::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::exact(HeaderValue::from_static("http://localhost:3000")))
+                .allow_methods(AllowMethods::list([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS]))
+                .allow_headers(AllowHeaders::list([header::CONTENT_TYPE, header::AUTHORIZATION]))
+                .allow_credentials(true),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
