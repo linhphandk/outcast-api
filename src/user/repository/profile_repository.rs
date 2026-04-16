@@ -34,6 +34,17 @@ pub struct NewProfile {
     pub username: String,
 }
 
+#[derive(AsChangeset)]
+#[diesel(table_name = profiles)]
+pub struct UpdateProfile {
+    pub name: String,
+    pub bio: String,
+    pub niche: String,
+    pub avatar_url: String,
+    pub username: String,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, PartialEq, Clone, Queryable)]
 pub struct SocialHandle {
     pub id: Uuid,
@@ -147,6 +158,21 @@ pub trait ProfileRepositoryTrait {
         social_handles: Vec<SocialHandleInput>,
         rates: Vec<RateInput>,
     ) -> Result<ProfileWithDetails, ProfileRepositoryError>;
+
+    async fn find_by_user_id(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Option<Profile>, ProfileRepositoryError>;
+
+    async fn update_by_user_id(
+        &self,
+        user_id: Uuid,
+        name: String,
+        bio: String,
+        niche: String,
+        avatar_url: String,
+        username: String,
+    ) -> Result<Option<Profile>, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -368,6 +394,76 @@ impl ProfileRepositoryTrait for ProfileRepository {
         info!(profile_id = %result.profile.id, "Profile with details created successfully");
         Ok(result)
     }
+
+    #[instrument(skip(self), fields(user_id = %user_id))]
+    async fn find_by_user_id(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Option<Profile>, ProfileRepositoryError> {
+        debug!("Finding profile by user id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            profiles::table
+                .filter(profiles::user_id.eq(user_id))
+                .first::<Profile>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during profile lookup by user id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during profile lookup by user id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self, name, bio, niche, avatar_url), fields(user_id = %user_id, username = %username))]
+    async fn update_by_user_id(
+        &self,
+        user_id: Uuid,
+        name: String,
+        bio: String,
+        niche: String,
+        avatar_url: String,
+        username: String,
+    ) -> Result<Option<Profile>, ProfileRepositoryError> {
+        debug!("Updating profile by user id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let update = UpdateProfile {
+            name,
+            bio,
+            niche,
+            avatar_url,
+            username,
+            updated_at: Some(Utc::now()),
+        };
+
+        conn.interact(move |conn| {
+            diesel::update(profiles::table.filter(profiles::user_id.eq(user_id)))
+                .set(&update)
+                .get_result::<Profile>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during profile update by user id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during profile update by user id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +625,79 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_find_by_user_id_returns_profile() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let created = create_test_profile(&repo, user_id).await;
+
+        let found = repo.find_by_user_id(user_id).await.unwrap();
+
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_user_id_returns_none_when_missing() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = ProfileRepository::new(pool);
+
+        let found = repo.find_by_user_id(Uuid::new_v4()).await.unwrap();
+
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_by_user_id_success() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let _created = create_test_profile(&repo, user_id).await;
+
+        let updated = repo
+            .update_by_user_id(
+                user_id,
+                "Updated Name".to_string(),
+                "Updated bio".to_string(),
+                "updated niche".to_string(),
+                "https://example.com/new-avatar.png".to_string(),
+                format!("updated_{}", Uuid::new_v4().simple()),
+            )
+            .await
+            .unwrap();
+
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.user_id, user_id);
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.bio, "Updated bio");
+        assert_eq!(updated.niche, "updated niche");
+        assert_eq!(updated.avatar_url, "https://example.com/new-avatar.png");
+    }
+
+    #[tokio::test]
+    async fn test_update_by_user_id_returns_none_when_missing() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = ProfileRepository::new(pool);
+
+        let updated = repo
+            .update_by_user_id(
+                Uuid::new_v4(),
+                "Name".to_string(),
+                "Bio".to_string(),
+                "Niche".to_string(),
+                "https://example.com/avatar.png".to_string(),
+                "username_not_found".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert!(updated.is_none());
     }
 
     #[tokio::test]
