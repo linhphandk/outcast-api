@@ -529,6 +529,51 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn test_delete_session_unauthenticated_returns_401() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/auth/sessions/{}", Uuid::new_v4()))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_logout_unauthenticated_returns_401() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/auth/logout")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_logout_all_unauthenticated_returns_401() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/auth/logout-all")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     // -------------------------------------------------------------------------
     // POST /auth/logout
     // -------------------------------------------------------------------------
