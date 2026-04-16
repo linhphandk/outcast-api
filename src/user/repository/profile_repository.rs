@@ -423,7 +423,7 @@ impl ProfileRepositoryTrait for ProfileRepository {
         })
     }
 
-    #[instrument(skip(self, bio, avatar_url), fields(user_id = %user_id, username = %username))]
+    #[instrument(skip(self, name, bio, niche, avatar_url), fields(user_id = %user_id, username = %username))]
     async fn update_by_user_id(
         &self,
         user_id: Uuid,

@@ -83,7 +83,7 @@ impl<R: ProfileRepositoryTrait> ProfileService<R> {
             })
     }
 
-    #[instrument(skip(self, bio, avatar_url), fields(user_id = %user_id, username = %username))]
+    #[instrument(skip(self, name, bio, niche, avatar_url), fields(user_id = %user_id, username = %username))]
     pub async fn update_profile_by_user_id(
         &self,
         user_id: Uuid,
