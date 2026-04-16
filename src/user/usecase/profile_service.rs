@@ -10,6 +10,8 @@ use crate::user::repository::profile_repository::{
 pub enum ProfileServiceError {
     #[error("Repository error: {0}")]
     RepositoryError(#[from] ProfileRepositoryError),
+    #[error("Profile not found")]
+    ProfileNotFound,
 }
 
 pub struct ProfileService<R: ProfileRepositoryTrait> {
@@ -66,6 +68,42 @@ impl<R: ProfileRepositoryTrait> ProfileService<R> {
         info!(profile_id = %result.profile.id, "Profile created successfully");
         Ok(result)
     }
+
+    #[instrument(skip(self), fields(user_id = %user_id))]
+    pub async fn get_profile_by_user_id(&self, user_id: Uuid) -> Result<crate::user::repository::profile_repository::Profile, ProfileServiceError> {
+        self.repository
+            .find_by_user_id(user_id)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to get profile");
+                ProfileServiceError::RepositoryError(e)
+            })?
+            .ok_or_else(|| {
+                ProfileServiceError::ProfileNotFound
+            })
+    }
+
+    #[instrument(skip(self, bio, avatar_url), fields(user_id = %user_id, username = %username))]
+    pub async fn update_profile_by_user_id(
+        &self,
+        user_id: Uuid,
+        name: String,
+        bio: String,
+        niche: String,
+        avatar_url: String,
+        username: String,
+    ) -> Result<crate::user::repository::profile_repository::Profile, ProfileServiceError> {
+        self.repository
+            .update_by_user_id(user_id, name, bio, niche, avatar_url, username)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to update profile");
+                ProfileServiceError::RepositoryError(e)
+            })?
+            .ok_or_else(|| {
+                ProfileServiceError::ProfileNotFound
+            })
+    }
 }
 
 #[cfg(test)]
@@ -76,6 +114,7 @@ mod tests {
     };
     use bigdecimal::BigDecimal;
     use chrono::Utc;
+    use mockall::predicate::eq;
     use uuid::Uuid;
 
     fn make_profile(user_id: Uuid) -> Profile {
@@ -320,5 +359,89 @@ mod tests {
         assert_eq!(details.social_handles[1].platform, "youtube");
         assert_eq!(details.rates[0].rate_type, "post");
         assert_eq!(details.rates[1].rate_type, "story");
+    }
+
+    #[tokio::test]
+    async fn test_get_profile_by_user_id_success() {
+        let user_id = Uuid::new_v4();
+        let profile = make_profile(user_id);
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_find_by_user_id()
+            .with(eq(user_id))
+            .times(1)
+            .return_once(move |_| Ok(Some(profile.clone())));
+
+        let service = ProfileService::new(mock);
+        let result = service.get_profile_by_user_id(user_id).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn test_get_profile_by_user_id_not_found() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_find_by_user_id()
+            .with(eq(user_id))
+            .times(1)
+            .return_once(|_| Ok(None));
+
+        let service = ProfileService::new(mock);
+        let result = service.get_profile_by_user_id(user_id).await;
+        assert!(matches!(result, Err(ProfileServiceError::ProfileNotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_update_profile_by_user_id_success() {
+        let user_id = Uuid::new_v4();
+        let profile = make_profile(user_id);
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_update_by_user_id()
+            .with(
+                eq(user_id),
+                eq("Alice".to_string()),
+                eq("Bio".to_string()),
+                eq("niche".to_string()),
+                eq("https://example.com/avatar.png".to_string()),
+                eq("alice_tech".to_string()),
+            )
+            .times(1)
+            .return_once(move |_, _, _, _, _, _| Ok(Some(profile.clone())));
+
+        let service = ProfileService::new(mock);
+        let result = service
+            .update_profile_by_user_id(
+                user_id,
+                "Alice".to_string(),
+                "Bio".to_string(),
+                "niche".to_string(),
+                "https://example.com/avatar.png".to_string(),
+                "alice_tech".to_string(),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().user_id, user_id);
+    }
+
+    #[tokio::test]
+    async fn test_update_profile_by_user_id_not_found() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_update_by_user_id()
+            .times(1)
+            .return_once(|_, _, _, _, _, _| Ok(None));
+
+        let service = ProfileService::new(mock);
+        let result = service
+            .update_profile_by_user_id(
+                user_id,
+                "Alice".to_string(),
+                "Bio".to_string(),
+                "niche".to_string(),
+                "https://example.com/avatar.png".to_string(),
+                "alice_tech".to_string(),
+            )
+            .await;
+        assert!(matches!(result, Err(ProfileServiceError::ProfileNotFound)));
     }
 }
