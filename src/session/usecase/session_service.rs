@@ -376,4 +376,287 @@ mod tests {
         let err = svc.refresh("tok", SECRET).await.unwrap_err();
         assert!(matches!(err, SessionServiceError::Expired));
     }
+
+    #[tokio::test]
+    async fn refresh_user_not_found_returns_user_not_found() {
+        let user_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let old_token = "refresh_user_missing";
+        let session = make_session(session_id, user_id, old_token, false);
+        let revoked = make_session(session_id, user_id, old_token, true);
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_by_refresh_token()
+            .with(eq(old_token))
+            .return_once(move |_| Ok(Some(session)));
+        session_repo
+            .expect_revoke()
+            .with(eq(session_id))
+            .return_once(move |_| Ok(revoked));
+
+        let mut user_repo = MockUserRepositoryTrait::new();
+        user_repo
+            .expect_find_by_id()
+            .with(eq(user_id))
+            .return_once(|_| Ok(None));
+
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc.refresh(old_token, SECRET).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::UserNotFound));
+    }
+
+    #[tokio::test]
+    async fn create_session_success() {
+        let user_id = Uuid::new_v4();
+        let email = "create@example.com";
+        let session_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_create()
+            .return_once(move |u_id, rt, ua, ip, exp| {
+                let now = Utc::now().naive_utc();
+                Ok(Session {
+                    id: session_id,
+                    user_id: u_id,
+                    refresh_token: rt.to_owned(),
+                    user_agent: ua,
+                    ip_address: ip,
+                    expires_at: exp,
+                    revoked_at: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+            });
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let result = svc
+            .create_session(user_id, email, Some("UA".to_string()), Some("1.2.3.4".to_string()), SECRET)
+            .await
+            .unwrap();
+
+        assert!(!result.access_token.is_empty());
+        assert_eq!(result.refresh_token.len(), 128);
+
+        let claims = crate::user::crypto::jwt::verify_jwt(&result.access_token, SECRET).unwrap();
+        assert_eq!(claims.sub, user_id);
+        assert_eq!(claims.email, email);
+        assert_eq!(claims.session_id, session_id);
+    }
+
+    #[tokio::test]
+    async fn create_session_repo_error_propagates() {
+        let user_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_create()
+            .return_once(|_, _, _, _, _| {
+                Err(SessionRepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("db down".to_string()),
+                    ),
+                ))
+            });
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc
+            .create_session(user_id, "e@e.com", None, None, SECRET)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionServiceError::SessionRepository(_)));
+    }
+
+    #[tokio::test]
+    async fn logout_success() {
+        let session_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let revoked = make_session(session_id, user_id, "tok", true);
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_revoke()
+            .with(eq(session_id))
+            .return_once(move |_| Ok(revoked));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let result = svc.logout(session_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn logout_repo_error_propagates() {
+        let session_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_revoke()
+            .with(eq(session_id))
+            .return_once(|_| {
+                Err(SessionRepositoryError::DieselError(
+                    diesel::result::Error::NotFound,
+                ))
+            });
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc.logout(session_id).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::SessionRepository(_)));
+    }
+
+    #[tokio::test]
+    async fn logout_all_success() {
+        let user_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_delete_all_by_user_id()
+            .with(eq(user_id))
+            .return_once(|_| Ok(()));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let result = svc.logout_all(user_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn logout_all_repo_error_propagates() {
+        let user_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_delete_all_by_user_id()
+            .with(eq(user_id))
+            .return_once(|_| {
+                Err(SessionRepositoryError::DieselError(
+                    diesel::result::Error::NotFound,
+                ))
+            });
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc.logout_all(user_id).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::SessionRepository(_)));
+    }
+
+    #[tokio::test]
+    async fn list_sessions_filters_revoked_and_expired() {
+        let user_id = Uuid::new_v4();
+        let active = make_session(Uuid::new_v4(), user_id, "t1", false);
+        let revoked = make_session(Uuid::new_v4(), user_id, "t2", true);
+        let expired = make_expired_session(Uuid::new_v4(), user_id, "t3");
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_all_by_user_id()
+            .with(eq(user_id))
+            .return_once(move |_| Ok(vec![active.clone(), revoked, expired]));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let sessions = svc.list_sessions(user_id).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].refresh_token, "t1");
+    }
+
+    #[tokio::test]
+    async fn list_sessions_empty_returns_empty() {
+        let user_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_all_by_user_id()
+            .with(eq(user_id))
+            .return_once(|_| Ok(vec![]));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let sessions = svc.list_sessions(user_id).await.unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_sessions_repo_error_propagates() {
+        let user_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_all_by_user_id()
+            .with(eq(user_id))
+            .return_once(|_| {
+                Err(SessionRepositoryError::DieselError(
+                    diesel::result::Error::NotFound,
+                ))
+            });
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc.list_sessions(user_id).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::SessionRepository(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_session_success() {
+        let user_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let session = make_session(session_id, user_id, "tok", false);
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_by_id()
+            .with(eq(session_id))
+            .return_once(move |_| Ok(Some(session)));
+        session_repo
+            .expect_delete()
+            .with(eq(session_id))
+            .return_once(|_| Ok(()));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let result = svc.delete_session(session_id, user_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_session_not_found_returns_not_found() {
+        let user_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_by_id()
+            .with(eq(session_id))
+            .return_once(|_| Ok(None));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        let err = svc.delete_session(session_id, user_id).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn delete_session_wrong_user_returns_not_found() {
+        let owner_id = Uuid::new_v4();
+        let other_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let session = make_session(session_id, owner_id, "tok", false);
+
+        let mut session_repo = MockSessionRepositoryTrait::new();
+        session_repo
+            .expect_find_by_id()
+            .with(eq(session_id))
+            .return_once(move |_| Ok(Some(session)));
+
+        let user_repo = MockUserRepositoryTrait::new();
+        let svc = SessionService::new(Arc::new(session_repo), Arc::new(user_repo));
+        // other_id tries to delete owner_id's session
+        let err = svc.delete_session(session_id, other_id).await.unwrap_err();
+        assert!(matches!(err, SessionServiceError::NotFound));
+    }
 }

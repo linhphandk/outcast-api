@@ -312,4 +312,39 @@ mod tests {
         let (status, _) = result.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn test_session_db_error_returns_401() {
+        let user_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let token = create_jwt(user_id, "user@example.com", session_id, SECRET).unwrap();
+
+        let mut mock = MockSessionRepositoryTrait::new();
+        mock.expect_find_by_id()
+            .return_once(|_| {
+                Err(crate::session::repository::session_repository::SessionRepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("connection error".to_string()),
+                    ),
+                ))
+            });
+
+        let state = TestState {
+            jwt_secret: SECRET.to_owned(),
+            session_repo: Arc::new(mock),
+        };
+
+        let req = Request::builder()
+            .header("Authorization", format!("Bearer {}", token))
+            .body(())
+            .unwrap();
+        let (mut parts, _) = req.into_parts();
+
+        let result = AuthUser::from_request_parts(&mut parts, &state).await;
+        assert!(result.is_err());
+        let (status, msg) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(msg, "Session lookup failed");
+    }
 }

@@ -444,4 +444,60 @@ mod tests {
             .await;
         assert!(matches!(result, Err(ProfileServiceError::ProfileNotFound)));
     }
+
+    #[tokio::test]
+    async fn test_get_profile_by_user_id_repository_error() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_find_by_user_id()
+            .with(eq(user_id))
+            .times(1)
+            .return_once(|_| {
+                Err(ProfileRepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("connection error".to_string()),
+                    ),
+                ))
+            });
+
+        let service = ProfileService::new(mock);
+        let result = service.get_profile_by_user_id(user_id).await;
+        assert!(matches!(
+            result,
+            Err(ProfileServiceError::RepositoryError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_profile_by_user_id_repository_error() {
+        let user_id = Uuid::new_v4();
+        let mut mock = MockProfileRepositoryTrait::new();
+        mock.expect_update_by_user_id()
+            .times(1)
+            .return_once(|_, _, _, _, _, _| {
+                Err(ProfileRepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("connection error".to_string()),
+                    ),
+                ))
+            });
+
+        let service = ProfileService::new(mock);
+        let result = service
+            .update_profile_by_user_id(
+                user_id,
+                "Alice".to_string(),
+                "Bio".to_string(),
+                "niche".to_string(),
+                "https://example.com/avatar.png".to_string(),
+                "alice_tech".to_string(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(ProfileServiceError::RepositoryError(_))
+        ));
+    }
 }

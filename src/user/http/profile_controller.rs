@@ -406,4 +406,29 @@ mod tests {
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn test_update_my_profile_missing_token() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Any",
+                    "bio": "Any",
+                    "niche": "Any",
+                    "avatar_url": "https://example.com/any.png",
+                    "username": "any"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }

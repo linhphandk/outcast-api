@@ -225,10 +225,12 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use crate::ApiDoc;
-    use crate::session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
+    use crate::session::repository::session_repository::{
+        MockSessionRepositoryTrait, SessionRepository, SessionRepositoryTrait,
+    };
     use crate::session::usecase::session_service::SessionService;
     use crate::user::crypto::jwt::verify_jwt;
-    use crate::user::repository::user_repository::UserRepositoryTrait;
+    use crate::user::repository::user_repository::{UserRepository, UserRepositoryTrait};
     use axum::body::Body;
     use axum::http::{Request, header};
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
@@ -699,5 +701,160 @@ mod tests {
         let body = me_response.into_body().collect().await.unwrap().to_bytes();
         let me_res: MeRes = serde_json::from_slice(&body).unwrap();
         assert_eq!(me_res.email, "integration@example.com");
+    }
+
+    /// Builds an app whose SessionRepository always fails on `create`, to test
+    /// the "Failed to generate token" error branch in create_user / login_user.
+    fn build_app_with_failing_session(pool: deadpool_diesel::postgres::Pool) -> Router {
+        let repo = UserRepository::new(pool.clone());
+        let service = UserService::new(repo, "test_pepper".to_string());
+
+        let mut mock_session_repo = MockSessionRepositoryTrait::new();
+        mock_session_repo.expect_create().returning(|_, _, _, _, _| {
+            Err(
+                crate::session::repository::session_repository::SessionRepositoryError::DieselError(
+                    diesel::result::Error::DatabaseError(
+                        diesel::result::DatabaseErrorKind::Unknown,
+                        Box::new("forced failure".to_string()),
+                    ),
+                ),
+            )
+        });
+        // find_by_id needed for AuthUser extractor if used, but not for these tests
+        mock_session_repo.expect_find_by_id().returning(|_| Ok(None));
+
+        let failing_session_repo: Arc<dyn SessionRepositoryTrait> = Arc::new(mock_session_repo);
+        let session_user_repo: Arc<dyn UserRepositoryTrait> =
+            Arc::new(UserRepository::new(pool));
+        let session_service =
+            SessionService::new(failing_session_repo.clone(), session_user_repo);
+
+        let state = TestState {
+            service,
+            session_service,
+            session_repo: failing_session_repo,
+            jwt_secret: "test_jwt_secret".to_string(),
+        };
+
+        Router::new()
+            .route("/user", post(create_user))
+            .route("/user/login", post(login_user))
+            .route("/user/me", get(get_me))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_create_user_session_creation_fails_returns_500() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app_with_failing_session(pool);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "session_fail@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8_lossy(&body);
+        assert!(body_str.contains("Failed to generate token"));
+    }
+
+    #[tokio::test]
+    async fn test_login_user_session_creation_fails_returns_500() {
+        let (_container, pool) = setup_test_db().await;
+
+        // Create the user first using the normal app.
+        let normal_app = build_app(pool.clone());
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "login_session_fail@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let resp = normal_app.oneshot(create_request).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Now login using the app with failing session service.
+        let failing_app = build_app_with_failing_session(pool);
+        let login_request = Request::builder()
+            .method("POST")
+            .uri("/user/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "login_session_fail@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = failing_app.oneshot(login_request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8_lossy(&body);
+        assert!(body_str.contains("Failed to generate token"));
+    }
+
+    #[tokio::test]
+    async fn test_login_user_hash_error_returns_500() {
+        let (_container, pool) = setup_test_db().await;
+
+        // Insert a user with a corrupt password hash directly in the DB.
+        {
+            use crate::schema::users;
+            use diesel::prelude::*;
+            let conn = pool.get().await.unwrap();
+            conn.interact(move |conn| {
+                diesel::insert_into(users::table)
+                    .values((
+                        users::id.eq(uuid::Uuid::new_v4()),
+                        users::email.eq("corrupt_hash@example.com"),
+                        users::password.eq("not_a_valid_bcrypt_hash"),
+                    ))
+                    .execute(conn)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        }
+
+        let app = build_app(pool);
+        let login_request = Request::builder()
+            .method("POST")
+            .uri("/user/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "corrupt_hash@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(login_request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_str = String::from_utf8_lossy(&body);
+        assert!(body_str.contains("Login failed"));
     }
 }
