@@ -1045,6 +1045,10 @@ PG__DBNAME=postgres
 DATABASE_URL=postgres://postgres:example@localhost:5432/postgres
 PASSWORD_PEPPER=your-secret-pepper-value-here
 JWT_SECRET=your-secret-jwt-key-here
+INSTAGRAM__CLIENT_ID=
+INSTAGRAM__CLIENT_SECRET=
+INSTAGRAM__REDIRECT_URI=http://localhost:3000/oauth/instagram/callback
+INSTAGRAM__GRAPH_API_VERSION=v19.0
 ```
 
 > ⚠️ **Important:** The `PASSWORD_PEPPER` and `JWT_SECRET` should be long, random strings in production. For local development, any string works.
@@ -1129,6 +1133,21 @@ The application reads its configuration from environment variables. The separato
 | `DATABASE_URL` | Full PostgreSQL connection string (used by Diesel) | `postgres://postgres:example@localhost:5432/postgres` |
 | `PASSWORD_PEPPER` | Secret key used to pepper passwords before hashing | (A long random string) |
 | `JWT_SECRET` | Secret key used to sign JWT tokens | (A long random string) |
+| `INSTAGRAM__CLIENT_ID` | Meta app OAuth client ID for Instagram | (From Meta app dashboard) |
+| `INSTAGRAM__CLIENT_SECRET` | Meta app OAuth client secret for Instagram | (From Meta app dashboard) |
+| `INSTAGRAM__REDIRECT_URI` | OAuth callback URL registered in Meta app | `http://localhost:3000/oauth/instagram/callback` |
+| `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version used by client | `v19.0` |
+
+### Instagram OAuth Setup (Meta App)
+
+1. Open [Meta for Developers](https://developers.facebook.com/) and create an app.
+2. Add **Instagram Graph API** to the app.
+3. Set the OAuth callback URL to the same value as `INSTAGRAM__REDIRECT_URI`.
+4. Copy the app values into your `.env` file:
+   - `INSTAGRAM__CLIENT_ID` from App ID
+   - `INSTAGRAM__CLIENT_SECRET` from App Secret
+   - `INSTAGRAM__REDIRECT_URI` from your redirect URL
+   - `INSTAGRAM__GRAPH_API_VERSION` (use default `v19.0` unless needed)
 
 > **Security note:** `PASSWORD_PEPPER` and `JWT_SECRET` are extremely sensitive. If someone obtains the `JWT_SECRET`, they can create fake tokens and impersonate any user. If someone obtains the `PASSWORD_PEPPER`, they can attempt to crack password hashes from the database. Never commit these values to version control.
 

@@ -1,3 +1,4 @@
+mod config;
 pub mod schema;
 mod instagram;
 mod session;
@@ -11,7 +12,6 @@ use axum::{
     routing::get,
 };
 use axum_macros::debug_handler;
-use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,7 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 use uuid::Uuid;
+use crate::config::AppConfig;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -59,25 +60,6 @@ use uuid::Uuid;
 )]
 pub struct ApiDoc;
 
-#[derive(Debug, Deserialize)]
-struct Config {
-    listen: String,
-    pg: deadpool_postgres::Config,
-    database_url: String,
-    password_pepper: String,
-    jwt_secret: String,
-}
-
-impl Config {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        config::Config::builder()
-            .add_source(config::Environment::default().separator("__"))
-            .build()
-            .unwrap()
-            .try_deserialize()
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 struct Event {
     id: Uuid,
@@ -90,6 +72,7 @@ pub struct AppState {
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
     pub profile_service: crate::user::usecase::profile_service::ProfileService<ProfileRepository>,
     pub jwt_secret: String,
+    pub app_config: Arc<AppConfig>,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
 }
@@ -131,6 +114,18 @@ impl axum::extract::FromRef<AppState> for SessionService {
 impl axum::extract::FromRef<AppState> for String {
     fn from_ref(state: &AppState) -> Self {
         state.jwt_secret.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for Arc<AppConfig> {
+    fn from_ref(state: &AppState) -> Self {
+        state.app_config.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for crate::config::InstagramConfig {
+    fn from_ref(state: &AppState) -> Self {
+        state.app_config.instagram.clone()
     }
 }
 
@@ -176,14 +171,14 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let config = Config::from_env().unwrap();
-    let pool = config
+    let app_config = AppConfig::from_env().unwrap();
+    let pool = app_config
         .pg
         .create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)
         .unwrap();
 
     let diesel_manager = deadpool_diesel::postgres::Manager::new(
-        &config.database_url,
+        &app_config.database_url,
         deadpool_diesel::Runtime::Tokio1,
     );
     let diesel_pool = deadpool_diesel::postgres::Pool::builder(diesel_manager)
@@ -199,7 +194,7 @@ async fn main() {
     let session_service = SessionService::new(session_repository.clone(), session_user_repository);
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
-        config.password_pepper,
+        app_config.password_pepper.clone(),
     );
     let profile_service = crate::user::usecase::profile_service::ProfileService::new(profile_repository);
 
@@ -207,7 +202,8 @@ async fn main() {
         pool,
         user_service,
         profile_service,
-        jwt_secret: config.jwt_secret,
+        jwt_secret: app_config.jwt_secret.clone(),
+        app_config: Arc::new(app_config.clone()),
         session_repository,
         session_service,
     };
@@ -228,11 +224,11 @@ async fn main() {
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
-    info!("Server running at http://{}/", &config.listen);
+    let listener = tokio::net::TcpListener::bind(&app_config.listen).await.unwrap();
+    info!("Server running at http://{}/", &app_config.listen);
     info!(
         "Try the following URLs: http://{}/v1.0/event.list",
-        &config.listen,
+        &app_config.listen,
     );
     axum::serve(listener, app).await.unwrap();
 }
