@@ -171,7 +171,7 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let app_config = AppConfig::from_env().unwrap();
+    let app_config = Arc::new(AppConfig::from_env().unwrap());
     let pool = app_config
         .pg
         .create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)
@@ -203,7 +203,7 @@ async fn main() {
         user_service,
         profile_service,
         jwt_secret: app_config.jwt_secret.clone(),
-        app_config: Arc::new(app_config.clone()),
+        app_config: app_config.clone(),
         session_repository,
         session_service,
     };
