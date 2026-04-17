@@ -64,6 +64,8 @@ diesel::table! {
         url -> Text,
         follower_count -> Int4,
         updated_at -> Nullable<Timestamptz>,
+        engagement_rate -> Numeric,
+        last_synced_at -> Nullable<Timestamptz>,
     }
 }
 
