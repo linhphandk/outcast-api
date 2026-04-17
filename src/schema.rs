@@ -1,6 +1,21 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    oauth_tokens (id) {
+        id -> Uuid,
+        profile_id -> Uuid,
+        provider -> Text,
+        access_token -> Text,
+        refresh_token -> Nullable<Text>,
+        expires_at -> Nullable<Timestamptz>,
+        provider_user_id -> Text,
+        scopes -> Text,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     profiles (id) {
         id -> Uuid,
         user_id -> Uuid,
@@ -62,9 +77,17 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(oauth_tokens -> profiles (profile_id));
 diesel::joinable!(profiles -> users (user_id));
 diesel::joinable!(rates -> profiles (profile_id));
 diesel::joinable!(sessions -> users (user_id));
 diesel::joinable!(social_handles -> profiles (profile_id));
 
-diesel::allow_tables_to_appear_in_same_query!(profiles, rates, sessions, social_handles, users,);
+diesel::allow_tables_to_appear_in_same_query!(
+    oauth_tokens,
+    profiles,
+    rates,
+    sessions,
+    social_handles,
+    users,
+);
