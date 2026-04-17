@@ -33,7 +33,7 @@ impl IgClient {
             "https://{}/{}/dialog/oauth",
             FACEBOOK_OAUTH_HOST, self.cfg.graph_api_version
         ))
-        .expect("Failed to parse Facebook OAuth authorize URL");
+        .expect("BUG: Failed to construct Facebook OAuth URL - this should never happen with valid constants");
 
         let scopes = AUTHORIZE_SCOPES.join(",");
         url.query_pairs_mut()
@@ -43,7 +43,7 @@ impl IgClient {
             .append_pair("scope", &scopes)
             .append_pair("response_type", "code");
 
-        url.into()
+        url.to_string()
     }
 }
 
