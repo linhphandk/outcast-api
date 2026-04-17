@@ -15,7 +15,7 @@ impl IgClient {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("Failed to build reqwest client");
+            .expect("Failed to initialize Instagram HTTP client");
 
         Self { http, cfg }
     }
