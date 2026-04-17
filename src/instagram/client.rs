@@ -1,15 +1,25 @@
+use std::fmt;
 use std::time::Duration;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InstagramConfig {
     pub base_url: String,
     pub access_token: String,
 }
 
+impl fmt::Debug for InstagramConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstagramConfig")
+            .field("base_url", &self.base_url)
+            .field("access_token", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct IgClient {
-    pub http: reqwest::Client,
-    pub cfg: InstagramConfig,
+    http: reqwest::Client,
+    cfg: InstagramConfig,
 }
 
 impl IgClient {
