@@ -1,4 +1,5 @@
 pub mod schema;
+mod instagram;
 mod session;
 mod user;
 use tracing::info;
