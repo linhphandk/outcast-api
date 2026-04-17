@@ -1,9 +1,5 @@
 use std::time::Duration;
-
-#[derive(Clone, Debug)]
-pub struct InstagramConfig {
-    // Placeholder for future configuration
-}
+use crate::config::InstagramConfig;
 
 pub struct IgClient {
     http: reqwest::Client,

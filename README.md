@@ -35,3 +35,12 @@ To run the integration tests:
 ```bash
 cargo test
 ```
+
+### Instagram OAuth Configuration
+1. Create a Meta app in the [Meta for Developers](https://developers.facebook.com/) dashboard.
+2. Add **Instagram Basic Display** (or your target Instagram product) to the app.
+3. Copy the app credentials into your `.env`:
+   - `INSTAGRAM__CLIENT_ID` ← Meta App ID / Client ID
+   - `INSTAGRAM__CLIENT_SECRET` ← Meta App Secret / Client Secret
+   - `INSTAGRAM__REDIRECT_URI` ← OAuth callback URL configured in Meta app settings (default: `http://localhost:3000/oauth/instagram/callback`)
+4. Optionally set `INSTAGRAM__GRAPH_API_VERSION` (defaults to `v19.0`).

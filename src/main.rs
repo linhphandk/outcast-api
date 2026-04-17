@@ -1,4 +1,5 @@
 pub mod schema;
+mod config;
 mod instagram;
 mod session;
 mod user;
@@ -11,7 +12,6 @@ use axum::{
     routing::get,
 };
 use axum_macros::debug_handler;
-use config::ConfigError;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
@@ -58,25 +58,6 @@ use uuid::Uuid;
     )
 )]
 pub struct ApiDoc;
-
-#[derive(Debug, Deserialize)]
-struct Config {
-    listen: String,
-    pg: deadpool_postgres::Config,
-    database_url: String,
-    password_pepper: String,
-    jwt_secret: String,
-}
-
-impl Config {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        config::Config::builder()
-            .add_source(config::Environment::default().separator("__"))
-            .build()
-            .unwrap()
-            .try_deserialize()
-    }
-}
 
 #[derive(Deserialize, Serialize)]
 struct Event {
@@ -176,7 +157,7 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let config = Config::from_env().unwrap();
+    let config = crate::config::AppConfig::from_env().unwrap();
     let pool = config
         .pg
         .create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)
