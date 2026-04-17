@@ -54,6 +54,8 @@ pub struct SocialHandle {
     pub url: String,
     pub follower_count: i32,
     pub updated_at: Option<DateTime<Utc>>,
+    pub engagement_rate: BigDecimal,
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable)]

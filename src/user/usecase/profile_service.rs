@@ -140,6 +140,8 @@ mod tests {
             url: "https://instagram.com/alice_tech".to_string(),
             follower_count: 50_000,
             updated_at: Some(Utc::now()),
+            engagement_rate: BigDecimal::from(0),
+            last_synced_at: None,
         }
     }
 
@@ -297,6 +299,8 @@ mod tests {
                         url: h.url,
                         follower_count: h.follower_count,
                         updated_at: Some(Utc::now()),
+                        engagement_rate: BigDecimal::from(0),
+                        last_synced_at: None,
                     })
                     .collect();
                 let inserted_rates = rates
