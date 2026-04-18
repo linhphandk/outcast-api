@@ -77,7 +77,10 @@ struct MotoServer {
 }
 
 impl MotoServer {
-    /// Spawn `moto_server` on an available port and wait until it is ready.
+    /// Spawn `moto_server` on an available port and poll until it is ready.
+    ///
+    /// Panics if `moto_server` cannot be started (not installed) or if it
+    /// fails to respond within 10 seconds.
     async fn start() -> Self {
         // Pick a random port by binding to 0 then dropping it
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -120,6 +123,8 @@ impl Drop for MotoServer {
 // S3 client + bucket creation helper
 // ---------------------------------------------------------------------------
 
+/// Build an [`S3Adapter`] backed by a Moto server. Creates the test bucket
+/// and uses fake AWS credentials so no real AWS account is needed.
 async fn build_s3_adapter(moto_endpoint: &str) -> S3Adapter {
     let s3_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new("us-east-1"))
@@ -155,6 +160,8 @@ async fn build_s3_adapter(moto_endpoint: &str) -> S3Adapter {
 // DB setup (same pattern as existing tests)
 // ---------------------------------------------------------------------------
 
+/// Spin up a testcontainers Postgres instance, run Diesel migrations, and
+/// return both the container handle (to keep it alive) and the connection pool.
 async fn setup_test_db() -> (
     testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
     deadpool_diesel::postgres::Pool,
@@ -186,6 +193,8 @@ async fn setup_test_db() -> (
 // App builder
 // ---------------------------------------------------------------------------
 
+/// Build an Axum router wired with the user/session routes and the given
+/// storage backend.
 fn build_app(pool: deadpool_diesel::postgres::Pool, storage: Arc<dyn StoragePort>) -> Router {
     let repo = UserRepository::new(pool.clone());
     let service = UserService::new_with_storage(repo, TEST_PEPPER.to_string(), storage);
@@ -214,6 +223,8 @@ fn build_app(pool: deadpool_diesel::postgres::Pool, storage: Arc<dyn StoragePort
 // Helper: create a user and return the auth token + user id
 // ---------------------------------------------------------------------------
 
+/// Create a test user account via the HTTP endpoint and return the JWT token
+/// and user ID.
 async fn create_test_user(
     pool: deadpool_diesel::postgres::Pool,
     storage: Arc<dyn StoragePort>,
@@ -245,6 +256,9 @@ async fn create_test_user(
 // Helper: build a multipart body for the image upload
 // ---------------------------------------------------------------------------
 
+/// Build a `multipart/form-data` body containing one `image` field.
+///
+/// Returns `(content_type_header, body_bytes)` for use in a request.
 fn build_multipart_body(
     content_type: &str,
     data: &[u8],
