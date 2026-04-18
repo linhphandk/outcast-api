@@ -161,6 +161,23 @@ impl IgClient {
         Ok(serde_json::from_str(&body)?)
     }
 
+    pub async fn refresh_long_lived_token(&self, long_lived: &str) -> Result<CodeExchange, IgError> {
+        let res = self
+            .http
+            .get(self.build_long_lived_refresh_url(long_lived))
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
     fn build_exchange_url(&self, code: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
             "https://{}/{}/oauth/access_token",
@@ -185,6 +202,16 @@ impl IgClient {
             .append_pair("grant_type", "ig_exchange_token")
             .append_pair("client_secret", &self.cfg.client_secret)
             .append_pair("access_token", short);
+        url
+    }
+
+    fn build_long_lived_refresh_url(&self, long_lived: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!("https://{}/refresh_access_token", INSTAGRAM_GRAPH_HOST))
+            .expect("BUG: Failed to construct Instagram Graph refresh token URL - this should never happen with valid constants");
+
+        url.query_pairs_mut()
+            .append_pair("grant_type", "ig_refresh_token")
+            .append_pair("access_token", long_lived);
         url
     }
 
@@ -500,6 +527,25 @@ mod tests {
         assert_eq!(
             query.get("access_token"),
             Some(&"short-lived-token/unsafe?x=1".to_string())
+        );
+    }
+
+    #[test]
+    fn build_long_lived_refresh_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_long_lived_refresh_url("long-lived-token/unsafe?x=1");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.instagram.com"));
+        assert_eq!(parsed.path(), "/refresh_access_token");
+        assert_eq!(
+            query.get("grant_type"),
+            Some(&"ig_refresh_token".to_string())
+        );
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"long-lived-token/unsafe?x=1".to_string())
         );
     }
 
