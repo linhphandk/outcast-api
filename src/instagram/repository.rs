@@ -233,7 +233,10 @@ mod tests {
         assert_eq!(token.provider, "instagram");
         assert_eq!(token.access_token, "access-1");
         assert_eq!(token.refresh_token.as_deref(), Some("refresh-1"));
-        assert_eq!(token.expires_at, expires_at);
+        assert_eq!(
+            token.expires_at.map(|v| v.timestamp_micros()),
+            expires_at.map(|v| v.timestamp_micros())
+        );
         assert_eq!(token.provider_user_id, "ig-user-1");
         assert_eq!(token.scopes, "instagram_basic,instagram_manage_insights");
     }
