@@ -175,6 +175,16 @@ pub trait ProfileRepositoryTrait {
         avatar_url: String,
         username: String,
     ) -> Result<Option<Profile>, ProfileRepositoryError>;
+
+    async fn find_social_handles_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<SocialHandle>, ProfileRepositoryError>;
+
+    async fn find_rates_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<Rate>, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -463,6 +473,62 @@ impl ProfileRepositoryTrait for ProfileRepository {
         })?
         .map_err(|e| {
             error!(error = %e, "Diesel error during profile update by user id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    async fn find_social_handles_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<SocialHandle>, ProfileRepositoryError> {
+        debug!("Finding social handles by profile id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            social_handles::table
+                .filter(social_handles::profile_id.eq(profile_id))
+                .order(social_handles::platform.asc())
+                .load::<SocialHandle>(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handles lookup by profile id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handles lookup by profile id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    async fn find_rates_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<Rate>, ProfileRepositoryError> {
+        debug!("Finding rates by profile id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            rates::table
+                .filter(rates::profile_id.eq(profile_id))
+                .order(rates::type_.asc())
+                .load::<Rate>(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rates lookup by profile id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rates lookup by profile id");
             ProfileRepositoryError::DieselError(e)
         })
     }
@@ -1001,5 +1067,156 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 0, "Profile should have been rolled back");
+    }
+
+    // ── find_social_handles_by_profile_id ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_find_social_handles_empty_when_none_exist() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_social_handles_returns_only_own_profile_rows() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+
+        repo.add_social_handle(
+            profile_a.id,
+            "instagram".to_string(),
+            "@alice".to_string(),
+            "https://instagram.com/alice".to_string(),
+            1_000,
+        )
+        .await
+        .unwrap();
+
+        repo.add_social_handle(
+            profile_b.id,
+            "tiktok".to_string(),
+            "@bob".to_string(),
+            "https://tiktok.com/@bob".to_string(),
+            2_000,
+        )
+        .await
+        .unwrap();
+
+        let handles_a = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+
+        assert_eq!(handles_a.len(), 1);
+        assert_eq!(handles_a[0].profile_id, profile_a.id);
+        assert_eq!(handles_a[0].platform, "instagram");
+    }
+
+    #[tokio::test]
+    async fn test_find_social_handles_ordered_by_platform() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        // Insert in reverse alphabetical order.
+        for (platform, handle, url) in [
+            ("youtube", "@alice_yt", "https://youtube.com/@alice_yt"),
+            ("tiktok", "@alice_tk", "https://tiktok.com/@alice_tk"),
+            ("instagram", "@alice_ig", "https://instagram.com/alice_ig"),
+        ] {
+            repo.add_social_handle(
+                profile.id,
+                platform.to_string(),
+                handle.to_string(),
+                url.to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+        }
+
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+
+        assert_eq!(handles.len(), 3);
+        assert_eq!(handles[0].platform, "instagram");
+        assert_eq!(handles[1].platform, "tiktok");
+        assert_eq!(handles[2].platform, "youtube");
+    }
+
+    // ── find_rates_by_profile_id ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_find_rates_empty_when_none_exist() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+
+        assert!(rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_rates_returns_only_own_profile_rows() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+
+        repo.add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        repo.add_rate(profile_b.id, "story".to_string(), BigDecimal::from(200))
+            .await
+            .unwrap();
+
+        let rates_a = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+
+        assert_eq!(rates_a.len(), 1);
+        assert_eq!(rates_a[0].profile_id, profile_a.id);
+        assert_eq!(rates_a[0].rate_type, "post");
+    }
+
+    #[tokio::test]
+    async fn test_find_rates_ordered_by_type() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        // Insert in reverse alphabetical order.
+        for (rate_type, amount) in [("story", 200), ("reel", 800), ("post", 500)] {
+            repo.add_rate(profile.id, rate_type.to_string(), BigDecimal::from(amount))
+                .await
+                .unwrap();
+        }
+
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+
+        assert_eq!(rates.len(), 3);
+        assert_eq!(rates[0].rate_type, "post");
+        assert_eq!(rates[1].rate_type, "reel");
+        assert_eq!(rates[2].rate_type, "story");
     }
 }
