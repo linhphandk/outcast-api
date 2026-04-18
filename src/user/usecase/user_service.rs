@@ -18,11 +18,14 @@ pub enum ServiceError {
     HashError(#[from] bcrypt::BcryptError),
     #[error("Storage error: {0}")]
     StorageError(#[from] StorageError),
+    #[error("Storage not configured")]
+    StorageNotConfigured,
 }
 
 pub struct UserService<R: UserRepositoryTrait> {
     repository: R,
     pepper: String,
+    storage: Option<Arc<dyn StoragePort>>,
 }
 
 impl<R: UserRepositoryTrait + Clone> Clone for UserService<R> {
@@ -30,13 +33,26 @@ impl<R: UserRepositoryTrait + Clone> Clone for UserService<R> {
         Self {
             repository: self.repository.clone(),
             pepper: self.pepper.clone(),
+            storage: self.storage.clone(),
         }
     }
 }
 
 impl<R: UserRepositoryTrait> UserService<R> {
     pub fn new(repository: R, pepper: String) -> Self {
-        Self { repository, pepper }
+        Self {
+            repository,
+            pepper,
+            storage: None,
+        }
+    }
+
+    pub fn new_with_storage(repository: R, pepper: String, storage: Arc<dyn StoragePort>) -> Self {
+        Self {
+            repository,
+            pepper,
+            storage: Some(storage),
+        }
     }
 
     #[instrument(skip_all)]
@@ -95,16 +111,19 @@ impl<R: UserRepositoryTrait> UserService<R> {
             })
     }
 
-    #[instrument(skip(self, data, storage), fields(user_id = %user_id))]
+    #[instrument(skip(self, data), fields(user_id = %user_id))]
     pub async fn upload_avatar(
         &self,
         user_id: Uuid,
         data: Bytes,
         content_type: &str,
-        storage: Arc<dyn StoragePort>,
     ) -> Result<String, ServiceError> {
+        let storage = self
+            .storage
+            .as_ref()
+            .ok_or(ServiceError::StorageNotConfigured)?;
         let key = format!("avatars/{user_id}");
-        let avatar_url = storage.upload(&key, data, content_type).await?;
+        let avatar_url = storage.as_ref().upload(&key, data, content_type).await?;
         self.repository
             .update_avatar_url(user_id, &avatar_url)
             .await
@@ -348,7 +367,7 @@ mod tests {
         mock_storage
             .expect_upload()
             .withf(|key, _data, content_type| {
-                key.starts_with("avatars/") && *content_type == "image/png"
+                key.starts_with("avatars/") && content_type == "image/png"
             })
             .times(1)
             .returning(|_, _, _| Ok("s3://test-bucket/avatars/user.png".to_string()));
@@ -366,13 +385,13 @@ mod tests {
                 })
             });
 
-        let service = UserService::new(mock_repo, "test_pepper".to_string());
+        let service =
+            UserService::new_with_storage(mock_repo, "test_pepper".to_string(), Arc::new(mock_storage));
         let result = service
             .upload_avatar(
                 user_id,
                 Bytes::from_static(b"png-data"),
                 "image/png",
-                Arc::new(mock_storage),
             )
             .await;
 
@@ -391,13 +410,13 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Err(StorageError::UploadFailed("s3 unavailable".to_string())));
 
-        let service = UserService::new(mock_repo, "test_pepper".to_string());
+        let service =
+            UserService::new_with_storage(mock_repo, "test_pepper".to_string(), Arc::new(mock_storage));
         let result = service
             .upload_avatar(
                 user_id,
                 Bytes::from_static(b"png-data"),
                 "image/png",
-                Arc::new(mock_storage),
             )
             .await;
 

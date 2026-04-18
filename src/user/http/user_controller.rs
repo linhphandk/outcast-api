@@ -8,7 +8,6 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -16,7 +15,6 @@ use crate::session::http::cookies::set_auth_cookies;
 use crate::session::usecase::session_service::SessionService;
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::user_repository::{RepositoryError, UserRepository};
-use crate::user::storage::StoragePort;
 use crate::user::usecase::user_service::{ServiceError, UserService};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 
@@ -163,6 +161,10 @@ pub async fn login_user(
                 error!(error = %err, "Login failed due to internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
             }
+            ServiceError::StorageError(_) | ServiceError::StorageNotConfigured => {
+                error!(error = %err, "Login failed due to internal error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
+            }
         },
     }
 }
@@ -232,11 +234,12 @@ pub async fn get_me(
 pub async fn upload_profile_image(
     auth_user: AuthUser,
     State(service): State<UserService<UserRepository>>,
-    State(storage): State<Arc<dyn StoragePort>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let Some(field) = multipart.next_field().await.unwrap_or(None) else {
-        return (StatusCode::BAD_REQUEST, "Missing image field").into_response();
+    let field = match multipart.next_field().await {
+        Ok(Some(field)) => field,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "Missing image field").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid multipart payload").into_response(),
     };
 
     if field.name() != Some("image") {
@@ -261,17 +264,14 @@ pub async fn upload_profile_image(
         return (StatusCode::BAD_REQUEST, "Image size exceeds 5MB").into_response();
     }
 
-    if multipart.next_field().await.unwrap_or(None).is_some() {
-        return (StatusCode::BAD_REQUEST, "Only one image file is allowed").into_response();
+    match multipart.next_field().await {
+        Ok(Some(_)) => return (StatusCode::BAD_REQUEST, "Only one image file is allowed").into_response(),
+        Ok(None) => {}
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid multipart payload").into_response(),
     }
 
     match service
-        .upload_avatar(
-            auth_user.user_id,
-            Bytes::from(data),
-            &content_type,
-            storage,
-        )
+        .upload_avatar(auth_user.user_id, Bytes::from(data), &content_type)
         .await
     {
         Ok(avatar_url) => Json(UploadAvatarRes { avatar_url }).into_response(),
@@ -291,7 +291,6 @@ where
     UserService<UserRepository>: axum::extract::FromRef<S>,
     String: axum::extract::FromRef<S>,
     SessionService: axum::extract::FromRef<S>,
-    Arc<dyn StoragePort>: axum::extract::FromRef<S>,
     std::sync::Arc<dyn crate::session::repository::session_repository::SessionRepositoryTrait>:
         axum::extract::FromRef<S>,
     S: Clone + Send + Sync + 'static,
@@ -358,7 +357,6 @@ mod tests {
         service: UserService<UserRepository>,
         session_service: SessionService,
         session_repo: Arc<dyn SessionRepositoryTrait>,
-        storage: Arc<dyn StoragePort>,
         jwt_secret: String,
     }
 
@@ -380,12 +378,6 @@ mod tests {
         }
     }
 
-    impl axum::extract::FromRef<TestState> for Arc<dyn StoragePort> {
-        fn from_ref(state: &TestState) -> Self {
-            state.storage.clone()
-        }
-    }
-
     impl axum::extract::FromRef<TestState> for String {
         fn from_ref(state: &TestState) -> Self {
             state.jwt_secret.clone()
@@ -400,12 +392,10 @@ mod tests {
         let session_user_repo: Arc<dyn UserRepositoryTrait> =
             Arc::new(UserRepository::new(pool));
         let session_service = SessionService::new(session_repo.clone(), session_user_repo);
-        let storage: Arc<dyn StoragePort> = Arc::new(MockStoragePort::new());
         let state = TestState {
             service,
             session_service,
             session_repo,
-            storage,
             jwt_secret: "test_jwt_secret".to_string(),
         };
         Router::new()
@@ -823,13 +813,10 @@ mod tests {
             Arc::new(UserRepository::new(pool));
         let session_service =
             SessionService::new(failing_session_repo.clone(), session_user_repo);
-        let storage: Arc<dyn StoragePort> = Arc::new(MockStoragePort::new());
-
         let state = TestState {
             service,
             session_service,
             session_repo: failing_session_repo,
-            storage,
             jwt_secret: "test_jwt_secret".to_string(),
         };
 
@@ -862,12 +849,9 @@ mod tests {
         body
     }
 
-    fn build_app_with_storage(
-        pool: deadpool_diesel::postgres::Pool,
-        storage: Arc<dyn StoragePort>,
-    ) -> Router {
+    fn build_app_with_storage(pool: deadpool_diesel::postgres::Pool, storage: Arc<dyn StoragePort>) -> Router {
         let repo = UserRepository::new(pool.clone());
-        let service = UserService::new(repo, "test_pepper".to_string());
+        let service = UserService::new_with_storage(repo, "test_pepper".to_string(), storage);
         let session_repo: Arc<dyn SessionRepositoryTrait> =
             Arc::new(SessionRepository::new(pool.clone()));
         let session_user_repo: Arc<dyn UserRepositoryTrait> =
@@ -877,7 +861,6 @@ mod tests {
             service,
             session_service,
             session_repo,
-            storage,
             jwt_secret: "test_jwt_secret".to_string(),
         };
 
