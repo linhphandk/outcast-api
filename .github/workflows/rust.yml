@@ -17,5 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: Swatinem/rust-cache@v2
+    - name: Install moto_server (S3 mock for integration tests)
+      run: pip install "moto[s3,server]"
     - name: Run tests
       run: cargo test --verbose
