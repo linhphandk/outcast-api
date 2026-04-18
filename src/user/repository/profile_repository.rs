@@ -185,6 +185,19 @@ pub trait ProfileRepositoryTrait {
         &self,
         profile_id: Uuid,
     ) -> Result<Vec<Rate>, ProfileRepositoryError>;
+
+    async fn update_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+        amount: BigDecimal,
+    ) -> Result<Option<Rate>, ProfileRepositoryError>;
+
+    async fn delete_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -531,6 +544,72 @@ impl ProfileRepositoryTrait for ProfileRepository {
             error!(error = %e, "Diesel error during rates lookup by profile id");
             ProfileRepositoryError::DieselError(e)
         })
+    }
+
+    #[instrument(skip(self, amount), fields(rate_id = %rate_id, profile_id = %profile_id))]
+    async fn update_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+        amount: BigDecimal,
+    ) -> Result<Option<Rate>, ProfileRepositoryError> {
+        debug!("Updating rate");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::update(
+                rates::table
+                    .filter(rates::id.eq(rate_id))
+                    .filter(rates::profile_id.eq(profile_id)),
+            )
+            .set(rates::amount.eq(amount))
+            .get_result::<Rate>(conn)
+            .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rate update");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rate update");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(rate_id = %rate_id, profile_id = %profile_id))]
+    async fn delete_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError> {
+        debug!("Deleting rate");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::delete(
+                rates::table
+                    .filter(rates::id.eq(rate_id))
+                    .filter(rates::profile_id.eq(profile_id)),
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rate deletion");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rate deletion");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|rows_affected| rows_affected > 0)
     }
 }
 
@@ -1218,5 +1297,125 @@ mod tests {
         assert_eq!(rates[0].rate_type, "post");
         assert_eq!(rates[1].rate_type, "reel");
         assert_eq!(rates[2].rate_type, "story");
+    }
+
+    // ── update_rate ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_rate_returns_updated_rate() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let rate = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        let updated = repo
+            .update_rate(rate.id, profile.id, BigDecimal::from(750))
+            .await
+            .unwrap();
+
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.id, rate.id);
+        assert_eq!(updated.profile_id, profile.id);
+        assert_eq!(updated.rate_type, "post");
+        assert_eq!(updated.amount, BigDecimal::from(750));
+    }
+
+    #[tokio::test]
+    async fn test_update_rate_wrong_profile_id_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let rate = repo
+            .add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not touch profile_a's rate.
+        let result = repo
+            .update_rate(rate.id, profile_b.id, BigDecimal::from(999))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+
+        // Confirm the original amount is unchanged.
+        let rates = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+        assert_eq!(rates[0].amount, BigDecimal::from(500));
+    }
+
+    #[tokio::test]
+    async fn test_update_rate_nonexistent_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let result = repo
+            .update_rate(Uuid::new_v4(), profile.id, BigDecimal::from(100))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    // ── delete_rate ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_rate_returns_true() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let rate = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        let deleted = repo.delete_rate(rate.id, profile.id).await.unwrap();
+
+        assert!(deleted);
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+        assert!(rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_rate_wrong_profile_id_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let rate = repo
+            .add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not delete profile_a's rate.
+        let deleted = repo.delete_rate(rate.id, profile_b.id).await.unwrap();
+
+        assert!(!deleted);
+        let rates = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+        assert_eq!(rates.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_rate_nonexistent_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let deleted = repo.delete_rate(Uuid::new_v4(), profile.id).await.unwrap();
+
+        assert!(!deleted);
     }
 }
