@@ -110,7 +110,6 @@ impl IgClient {
             .append_pair("grant_type", "ig_exchange_token")
             .append_pair("client_secret", &self.cfg.client_secret)
             .append_pair("access_token", short);
-
         url
     }
 }
