@@ -1,0 +1,2 @@
+ALTER TABLE rates
+DROP CONSTRAINT IF EXISTS rates_type_check;

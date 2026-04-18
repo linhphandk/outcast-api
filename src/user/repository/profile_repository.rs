@@ -1105,17 +1105,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_rate_invalid_type_fails() {
+    async fn test_add_rate_arbitrary_type_succeeds() {
         let (_container, pool) = setup_test_db().await;
         let user_id = create_test_user(&pool).await;
         let repo = ProfileRepository::new(pool);
         let profile = create_test_profile(&repo, user_id).await;
 
-        let result = repo
+        let rate = repo
             .add_rate(profile.id, "invalid_type".to_string(), BigDecimal::from(100))
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_err(), "Expected invalid rate type to fail");
+        assert_eq!(rate.profile_id, profile.id);
+        assert_eq!(rate.rate_type, "invalid_type");
+        assert_eq!(rate.amount, BigDecimal::from(100));
     }
 
     #[tokio::test]

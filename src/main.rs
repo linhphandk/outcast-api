@@ -35,6 +35,7 @@ use uuid::Uuid;
         crate::user::http::user_controller::get_me,
         crate::user::http::profile_controller::create_my_profile,
         crate::user::http::profile_controller::get_my_profile,
+        crate::user::http::profile_controller::get_platforms,
         crate::user::http::profile_controller::update_my_profile,
     ),
     components(

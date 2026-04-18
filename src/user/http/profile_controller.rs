@@ -21,6 +21,8 @@ use crate::user::{
     usecase::profile_service::{ProfileService, ProfileServiceError},
 };
 
+const AVAILABLE_PLATFORMS: [&str; 3] = ["instagram", "tiktok", "youtube"];
+
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreatorProfileRes {
     pub id: Uuid,
@@ -323,6 +325,19 @@ pub async fn update_my_profile(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/platforms",
+    responses(
+        (status = 200, description = "List available social platforms", body = [String])
+    ),
+    tag = "Profiles"
+)]
+#[instrument]
+pub async fn get_platforms() -> impl IntoResponse {
+    Json(AVAILABLE_PLATFORMS).into_response()
+}
+
 pub fn router<S>() -> Router<S>
 where
     ProfileService<ProfileRepository>: axum::extract::FromRef<S>,
@@ -332,6 +347,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/platforms", get(get_platforms))
         .route("/user/profile", get(get_my_profile))
         .route("/user/profile", post(create_my_profile))
         .route("/user/profile", put(update_my_profile))
@@ -804,7 +820,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_my_profile_invalid_rate_type_returns_bad_request_and_rolls_back() {
+    async fn test_create_my_profile_arbitrary_rate_type_is_allowed() {
         let (_container, pool) = setup_test_db().await;
         let app = build_app(pool.clone());
         let created = create_user(&app, "profile_create_invalid_rate@example.com").await;
@@ -831,11 +847,34 @@ mod tests {
             ))
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let res: CreatorProfileWithDetailsRes = serde_json::from_slice(&body).unwrap();
+        assert_eq!(res.rates.len(), 1);
+        assert_eq!(res.rates[0].rate_type, "invalid");
 
         let profile_repo = ProfileRepository::new(pool.clone());
         let profile = profile_repo.find_by_user_id(created.id).await.unwrap();
-        assert!(profile.is_none(), "Profile row should be rolled back");
+        assert!(profile.is_some(), "Profile row should be created");
+    }
+
+    #[tokio::test]
+    async fn test_get_platforms_returns_supported_platforms() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/platforms")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let res: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(res, vec!["instagram", "tiktok", "youtube"]);
     }
 
     #[tokio::test]

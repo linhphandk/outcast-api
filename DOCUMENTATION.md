@@ -429,7 +429,7 @@ erDiagram
     RATES {
         UUID id PK "Unique identifier (auto-generated)"
         UUID profile_id FK "Which profile this belongs to"
-        TEXT type "Rate type: post, story, or reel"
+        TEXT type "Rate type (free-form text)"
         NUMERIC_10_2 amount "Price in dollars (must be >= 0)"
     }
 
@@ -465,7 +465,7 @@ erDiagram
 - Each profile can have at most **one handle per platform** (enforced by a unique constraint).
 
 #### `rates` — Stores pricing for different content types
-- **`type`** — Must be one of: `post`, `story`, or `reel`.
+- **`type`** — Free-form text (for example: `post`, `story`, `reel`, or custom values).
 - **`amount`** — Price with up to 2 decimal places (e.g., `500.00`).
 - Each profile can have at most **one rate per type** (enforced by a unique constraint).
 
