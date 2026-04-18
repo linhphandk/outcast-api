@@ -153,7 +153,7 @@ pub async fn login_user(
                 warn!("Login failed: invalid credentials");
                 (StatusCode::UNAUTHORIZED, "Invalid email or password").into_response()
             }
-            ServiceError::RepositoryError(_) | ServiceError::HashError(_) => {
+            _ => {
                 error!(error = %err, "Login failed due to internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
             }

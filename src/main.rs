@@ -235,13 +235,7 @@ async fn main() {
     let session_user_repository: Arc<dyn UserRepositoryTrait> =
         Arc::new(UserRepository::new(diesel_pool.clone()));
     let session_service = SessionService::new(session_repository.clone(), session_user_repository);
-    let user_service = crate::user::usecase::user_service::UserService::new(
-        user_repository,
-        config.password_pepper,
-    );
-    let profile_service =
-        crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
-
+    
     // Build S3 client
     let mut s3_config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(config.s3.region.clone()));
@@ -257,6 +251,13 @@ async fn main() {
     let s3_client = aws_sdk_s3::Client::from_conf(s3_builder.build());
     let storage: Arc<dyn StoragePort> =
         Arc::new(S3Adapter::new(s3_client, config.s3.bucket.clone()));
+    let user_service = crate::user::usecase::user_service::UserService::new_with_storage(
+        user_repository,
+        config.password_pepper,
+        storage.clone(),
+    );
+    let profile_service =
+        crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
 
     let state = AppState {
         pool,
