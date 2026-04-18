@@ -228,6 +228,40 @@ impl ProfileRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    pub async fn reset_instagram_social_metrics(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<usize, ProfileRepositoryError> {
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::profile_id.eq(profile_id))
+                    .filter(social_handles::platform.eq("instagram")),
+            )
+            .set((
+                social_handles::follower_count.eq(0),
+                social_handles::engagement_rate.eq(BigDecimal::from(0)),
+                social_handles::last_synced_at.eq::<Option<DateTime<Utc>>>(None),
+            ))
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error resetting instagram social metrics");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error resetting instagram social metrics");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
 }
 
 #[async_trait]
@@ -1700,5 +1734,82 @@ mod tests {
             .unwrap();
 
         assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn test_reset_instagram_social_metrics_resets_only_instagram_rows() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        repo.add_social_handle(
+            profile.id,
+            "instagram".to_string(),
+            "@alice".to_string(),
+            "https://instagram.com/alice".to_string(),
+            1_000,
+        )
+        .await
+        .unwrap();
+        repo.add_social_handle(
+            profile.id,
+            "youtube".to_string(),
+            "@aliceyt".to_string(),
+            "https://youtube.com/@aliceyt".to_string(),
+            3_000,
+        )
+        .await
+        .unwrap();
+
+        let conn = repo.pool.get().await.unwrap();
+        let profile_id = profile.id;
+        conn.interact(move |conn| {
+            diesel::sql_query(
+                "UPDATE social_handles
+                 SET engagement_rate = 0.4321, last_synced_at = NOW()
+                 WHERE profile_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(profile_id)
+            .execute(conn)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        let affected = repo
+            .reset_instagram_social_metrics(profile.id)
+            .await
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+        let instagram = handles.iter().find(|h| h.platform == "instagram").unwrap();
+        let youtube = handles.iter().find(|h| h.platform == "youtube").unwrap();
+
+        assert_eq!(instagram.follower_count, 0);
+        assert_eq!(instagram.engagement_rate, BigDecimal::from(0));
+        assert!(instagram.last_synced_at.is_none());
+
+        assert_eq!(youtube.follower_count, 3_000);
+        assert_eq!(youtube.engagement_rate.to_string(), "0.4321");
+        assert!(youtube.last_synced_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_reset_instagram_social_metrics_is_idempotent() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let affected = repo
+            .reset_instagram_social_metrics(profile.id)
+            .await
+            .unwrap();
+        assert_eq!(affected, 0);
     }
 }

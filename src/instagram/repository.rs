@@ -66,6 +66,40 @@ impl OAuthTokenRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, provider = %provider))]
+    pub async fn delete(
+        &self,
+        profile_id: Uuid,
+        provider: &str,
+    ) -> Result<usize, OAuthTokenRepositoryError> {
+        info!("Deleting oauth token");
+
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            OAuthTokenRepositoryError::PoolError(e)
+        })?;
+
+        let provider = provider.to_string();
+
+        conn.interact(move |conn| {
+            diesel::delete(
+                oauth_tokens::table
+                    .filter(oauth_tokens::profile_id.eq(profile_id))
+                    .filter(oauth_tokens::provider.eq(provider)),
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during oauth token deletion");
+            OAuthTokenRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during oauth token deletion");
+            OAuthTokenRepositoryError::DieselError(e)
+        })
+    }
 }
 
 #[async_trait]
@@ -281,5 +315,30 @@ mod tests {
         assert_eq!(second.provider_user_id, "ig-user-2");
         assert_eq!(second.scopes, "instagram_basic,instagram_manage_insights");
         assert!(second.updated_at >= first.updated_at);
+    }
+
+    #[tokio::test]
+    async fn delete_is_idempotent_and_removes_matching_row() {
+        let (_container, pool) = setup_test_db().await;
+        let profile_id = create_test_profile(&pool).await;
+        let repo = OAuthTokenRepository::new(pool);
+
+        repo.upsert(
+            profile_id,
+            "instagram",
+            "access-1",
+            Some("refresh-1"),
+            Some(Utc::now() + chrono::Duration::hours(1)),
+            "ig-user-1",
+            "instagram_basic",
+        )
+        .await
+        .unwrap();
+
+        let deleted = repo.delete(profile_id, "instagram").await.unwrap();
+        assert_eq!(deleted, 1);
+
+        let deleted_again = repo.delete(profile_id, "instagram").await.unwrap();
+        assert_eq!(deleted_again, 0);
     }
 }
