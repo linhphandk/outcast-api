@@ -1,12 +1,14 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Multipart, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
 use axum_extra::extract::CookieJar;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -14,8 +16,12 @@ use crate::session::http::cookies::set_auth_cookies;
 use crate::session::usecase::session_service::SessionService;
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::user_repository::{RepositoryError, UserRepository};
+use crate::user::storage::StoragePort;
 use crate::user::usecase::user_service::{ServiceError, UserService};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
+
+const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
+const ALLOWED_AVATAR_CONTENT_TYPES: [&str; 3] = ["image/jpeg", "image/png", "image/webp"];
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateUserReq {
@@ -167,6 +173,11 @@ pub struct MeRes {
     pub email: String,
 }
 
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UploadAvatarRes {
+    pub avatar_url: String,
+}
+
 #[utoipa::path(
     get,
     path = "/user/me",
@@ -205,11 +216,82 @@ pub async fn get_me(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/user/profile/image",
+    responses(
+        (status = 200, description = "Avatar uploaded successfully", body = UploadAvatarRes),
+        (status = 400, description = "Invalid file type or size"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Users"
+)]
+#[instrument(skip_all)]
+pub async fn upload_profile_image(
+    auth_user: AuthUser,
+    State(service): State<UserService<UserRepository>>,
+    State(storage): State<Arc<dyn StoragePort>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let Some(field) = multipart.next_field().await.unwrap_or(None) else {
+        return (StatusCode::BAD_REQUEST, "Missing image field").into_response();
+    };
+
+    if field.name() != Some("image") {
+        return (StatusCode::BAD_REQUEST, "Invalid multipart field").into_response();
+    }
+
+    let content_type = match field.content_type() {
+        Some(content_type) => content_type.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "Missing content type").into_response(),
+    };
+
+    if !ALLOWED_AVATAR_CONTENT_TYPES.contains(&content_type.as_str()) {
+        return (StatusCode::BAD_REQUEST, "Unsupported image type").into_response();
+    }
+
+    let data = match field.bytes().await {
+        Ok(data) => data,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid multipart payload").into_response(),
+    };
+
+    if data.len() > MAX_AVATAR_BYTES {
+        return (StatusCode::BAD_REQUEST, "Image size exceeds 5MB").into_response();
+    }
+
+    if multipart.next_field().await.unwrap_or(None).is_some() {
+        return (StatusCode::BAD_REQUEST, "Only one image file is allowed").into_response();
+    }
+
+    match service
+        .upload_avatar(
+            auth_user.user_id,
+            Bytes::from(data),
+            &content_type,
+            storage,
+        )
+        .await
+    {
+        Ok(avatar_url) => Json(UploadAvatarRes { avatar_url }).into_response(),
+        Err(ServiceError::StorageError(err)) => {
+            error!(user_id = %auth_user.user_id, error = %err, "Avatar upload storage failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to upload avatar").into_response()
+        }
+        Err(err) => {
+            error!(user_id = %auth_user.user_id, error = %err, "Avatar upload failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to upload avatar").into_response()
+        }
+    }
+}
+
 pub fn router<S>() -> Router<S>
 where
     UserService<UserRepository>: axum::extract::FromRef<S>,
     String: axum::extract::FromRef<S>,
     SessionService: axum::extract::FromRef<S>,
+    Arc<dyn StoragePort>: axum::extract::FromRef<S>,
     std::sync::Arc<dyn crate::session::repository::session_repository::SessionRepositoryTrait>:
         axum::extract::FromRef<S>,
     S: Clone + Send + Sync + 'static,
@@ -218,6 +300,7 @@ where
         .route("/user", post(create_user))
         .route("/user/login", post(login_user))
         .route("/user/me", get(get_me))
+        .route("/user/profile/image", post(upload_profile_image))
 }
 
 #[cfg(test)]
@@ -231,10 +314,12 @@ mod tests {
     use crate::session::usecase::session_service::SessionService;
     use crate::user::crypto::jwt::verify_jwt;
     use crate::user::repository::user_repository::{UserRepository, UserRepositoryTrait};
+    use crate::user::storage::{MockStoragePort, StorageError, StoragePort};
     use axum::body::Body;
     use axum::http::{Request, header};
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
     use http_body_util::BodyExt;
+    use mockall::predicate::{always, eq};
     use tower::ServiceExt;
     use utoipa::OpenApi;
     use utoipa_scalar::{Scalar, Servable};
@@ -273,6 +358,7 @@ mod tests {
         service: UserService<UserRepository>,
         session_service: SessionService,
         session_repo: Arc<dyn SessionRepositoryTrait>,
+        storage: Arc<dyn StoragePort>,
         jwt_secret: String,
     }
 
@@ -294,6 +380,12 @@ mod tests {
         }
     }
 
+    impl axum::extract::FromRef<TestState> for Arc<dyn StoragePort> {
+        fn from_ref(state: &TestState) -> Self {
+            state.storage.clone()
+        }
+    }
+
     impl axum::extract::FromRef<TestState> for String {
         fn from_ref(state: &TestState) -> Self {
             state.jwt_secret.clone()
@@ -308,16 +400,19 @@ mod tests {
         let session_user_repo: Arc<dyn UserRepositoryTrait> =
             Arc::new(UserRepository::new(pool));
         let session_service = SessionService::new(session_repo.clone(), session_user_repo);
+        let storage: Arc<dyn StoragePort> = Arc::new(MockStoragePort::new());
         let state = TestState {
             service,
             session_service,
             session_repo,
+            storage,
             jwt_secret: "test_jwt_secret".to_string(),
         };
         Router::new()
             .route("/user", post(create_user))
             .route("/user/login", post(login_user))
             .route("/user/me", get(get_me))
+            .route("/user/profile/image", post(upload_profile_image))
             .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
             .with_state(state)
     }
@@ -728,11 +823,13 @@ mod tests {
             Arc::new(UserRepository::new(pool));
         let session_service =
             SessionService::new(failing_session_repo.clone(), session_user_repo);
+        let storage: Arc<dyn StoragePort> = Arc::new(MockStoragePort::new());
 
         let state = TestState {
             service,
             session_service,
             session_repo: failing_session_repo,
+            storage,
             jwt_secret: "test_jwt_secret".to_string(),
         };
 
@@ -740,7 +837,253 @@ mod tests {
             .route("/user", post(create_user))
             .route("/user/login", post(login_user))
             .route("/user/me", get(get_me))
+            .route("/user/profile/image", post(upload_profile_image))
             .with_state(state)
+    }
+
+    fn build_multipart_body(
+        boundary: &str,
+        field_name: &str,
+        filename: &str,
+        content_type: &str,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+        body.extend_from_slice(data);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
+    }
+
+    fn build_app_with_storage(
+        pool: deadpool_diesel::postgres::Pool,
+        storage: Arc<dyn StoragePort>,
+    ) -> Router {
+        let repo = UserRepository::new(pool.clone());
+        let service = UserService::new(repo, "test_pepper".to_string());
+        let session_repo: Arc<dyn SessionRepositoryTrait> =
+            Arc::new(SessionRepository::new(pool.clone()));
+        let session_user_repo: Arc<dyn UserRepositoryTrait> =
+            Arc::new(UserRepository::new(pool));
+        let session_service = SessionService::new(session_repo.clone(), session_user_repo);
+        let state = TestState {
+            service,
+            session_service,
+            session_repo,
+            storage,
+            jwt_secret: "test_jwt_secret".to_string(),
+        };
+
+        Router::new()
+            .route("/user", post(create_user))
+            .route("/user/login", post(login_user))
+            .route("/user/me", get(get_me))
+            .route("/user/profile/image", post(upload_profile_image))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_upload_profile_image_success() {
+        let (_container, pool) = setup_test_db().await;
+
+        let mut mock_storage = MockStoragePort::new();
+        mock_storage
+            .expect_upload()
+            .with(always(), always(), eq("image/png"))
+            .times(1)
+            .returning(|key, _, _| Ok(format!("s3://test-bucket/{key}")));
+        let app = build_app_with_storage(pool.clone(), Arc::new(mock_storage));
+
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "avatar_ok@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let create_response = app.clone().oneshot(create_request).await.unwrap();
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let create_body = create_response.into_body().collect().await.unwrap().to_bytes();
+        let created: CreateUserRes = serde_json::from_slice(&create_body).unwrap();
+
+        let boundary = "boundary123";
+        let body = build_multipart_body(boundary, "image", "avatar.png", "image/png", b"png-data");
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let res_body = response.into_body().collect().await.unwrap().to_bytes();
+        let res: UploadAvatarRes = serde_json::from_slice(&res_body).unwrap();
+        assert!(res.avatar_url.starts_with("s3://test-bucket/avatars/"));
+    }
+
+    #[tokio::test]
+    async fn test_upload_profile_image_rejects_unsupported_type() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "avatar_type@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let create_response = app.clone().oneshot(create_request).await.unwrap();
+        let create_body = create_response.into_body().collect().await.unwrap().to_bytes();
+        let created: CreateUserRes = serde_json::from_slice(&create_body).unwrap();
+
+        let boundary = "boundary456";
+        let body = build_multipart_body(
+            boundary,
+            "image",
+            "avatar.gif",
+            "image/gif",
+            b"gif-data",
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_upload_profile_image_rejects_oversized_file() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "avatar_big@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let create_response = app.clone().oneshot(create_request).await.unwrap();
+        let create_body = create_response.into_body().collect().await.unwrap().to_bytes();
+        let created: CreateUserRes = serde_json::from_slice(&create_body).unwrap();
+
+        let oversized = vec![b'a'; MAX_AVATAR_BYTES + 1];
+        let boundary = "boundary789";
+        let body = build_multipart_body(boundary, "image", "avatar.png", "image/png", &oversized);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_upload_profile_image_requires_auth() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool);
+
+        let boundary = "boundary000";
+        let body = build_multipart_body(boundary, "image", "avatar.png", "image/png", b"png-data");
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_upload_profile_image_storage_error_returns_500() {
+        let (_container, pool) = setup_test_db().await;
+
+        let mut mock_storage = MockStoragePort::new();
+        mock_storage
+            .expect_upload()
+            .times(1)
+            .returning(|_, _, _| Err(StorageError::UploadFailed("boom".to_string())));
+        let app = build_app_with_storage(pool.clone(), Arc::new(mock_storage));
+
+        let create_request = Request::builder()
+            .method("POST")
+            .uri("/user")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": "avatar_storage_err@example.com",
+                    "password": "password123"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let create_response = app.clone().oneshot(create_request).await.unwrap();
+        let create_body = create_response.into_body().collect().await.unwrap().to_bytes();
+        let created: CreateUserRes = serde_json::from_slice(&create_body).unwrap();
+
+        let boundary = "boundary500";
+        let body = build_multipart_body(boundary, "image", "avatar.png", "image/png", b"png-data");
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile/image")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(body))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]

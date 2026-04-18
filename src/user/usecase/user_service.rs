@@ -1,5 +1,8 @@
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
+use crate::user::storage::{StorageError, StoragePort};
+use bytes::Bytes;
+use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -13,6 +16,8 @@ pub enum ServiceError {
     InvalidCredentials,
     #[error("Password hash error: {0}")]
     HashError(#[from] bcrypt::BcryptError),
+    #[error("Storage error: {0}")]
+    StorageError(#[from] StorageError),
 }
 
 pub struct UserService<R: UserRepositoryTrait> {
@@ -89,12 +94,31 @@ impl<R: UserRepositoryTrait> UserService<R> {
                 ServiceError::UserNotFound
             })
     }
+
+    #[instrument(skip(self, data, storage), fields(user_id = %user_id))]
+    pub async fn upload_avatar(
+        &self,
+        user_id: Uuid,
+        data: Bytes,
+        content_type: &str,
+        storage: Arc<dyn StoragePort>,
+    ) -> Result<String, ServiceError> {
+        let key = format!("avatars/{user_id}");
+        let avatar_url = storage.upload(&key, data, content_type).await?;
+        self.repository
+            .update_avatar_url(user_id, &avatar_url)
+            .await
+            .map_err(ServiceError::RepositoryError)?;
+        Ok(avatar_url)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::user::repository::user_repository::MockUserRepositoryTrait;
+    use crate::user::storage::MockStoragePort;
+    use bytes::Bytes;
     use mockall::predicate::*;
     use uuid::Uuid;
 
@@ -313,5 +337,70 @@ mod tests {
         let result = service.get_me(user_id).await;
 
         assert!(matches!(result, Err(ServiceError::RepositoryError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_upload_avatar_success() {
+        let user_id = Uuid::new_v4();
+        let mut mock_repo = MockUserRepositoryTrait::new();
+        let mut mock_storage = MockStoragePort::new();
+
+        mock_storage
+            .expect_upload()
+            .withf(|key, _data, content_type| {
+                key.starts_with("avatars/") && *content_type == "image/png"
+            })
+            .times(1)
+            .returning(|_, _, _| Ok("s3://test-bucket/avatars/user.png".to_string()));
+
+        mock_repo
+            .expect_update_avatar_url()
+            .with(eq(user_id), eq("s3://test-bucket/avatars/user.png"))
+            .times(1)
+            .returning(move |user_id, url| {
+                Ok(User {
+                    id: user_id,
+                    email: "user@example.com".to_string(),
+                    password: "hashed".to_string(),
+                    avatar_url: Some(url.to_string()),
+                })
+            });
+
+        let service = UserService::new(mock_repo, "test_pepper".to_string());
+        let result = service
+            .upload_avatar(
+                user_id,
+                Bytes::from_static(b"png-data"),
+                "image/png",
+                Arc::new(mock_storage),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "s3://test-bucket/avatars/user.png");
+    }
+
+    #[tokio::test]
+    async fn test_upload_avatar_storage_error() {
+        let user_id = Uuid::new_v4();
+        let mock_repo = MockUserRepositoryTrait::new();
+        let mut mock_storage = MockStoragePort::new();
+
+        mock_storage
+            .expect_upload()
+            .times(1)
+            .returning(|_, _, _| Err(StorageError::UploadFailed("s3 unavailable".to_string())));
+
+        let service = UserService::new(mock_repo, "test_pepper".to_string());
+        let result = service
+            .upload_avatar(
+                user_id,
+                Bytes::from_static(b"png-data"),
+                "image/png",
+                Arc::new(mock_storage),
+            )
+            .await;
+
+        assert!(matches!(result, Err(ServiceError::StorageError(_))));
     }
 }
