@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::user::{
     http::auth_extractor::AuthUser,
-    repository::profile_repository::{ProfileRepository, Profile},
+    repository::profile_repository::{
+        Profile, ProfileRepository, ProfileWithDetails, Rate, SocialHandle,
+    },
     usecase::profile_service::{ProfileService, ProfileServiceError},
 };
 
@@ -45,6 +47,84 @@ impl From<Profile> for CreatorProfileRes {
 }
 
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SocialHandleRes {
+    pub id: Uuid,
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+    pub engagement_rate: String,
+    pub updated_at: Option<String>,
+    pub last_synced_at: Option<String>,
+}
+
+impl From<SocialHandle> for SocialHandleRes {
+    fn from(value: SocialHandle) -> Self {
+        Self {
+            id: value.id,
+            platform: value.platform,
+            handle: value.handle,
+            url: value.url,
+            follower_count: value.follower_count,
+            engagement_rate: value.engagement_rate.to_string(),
+            updated_at: value.updated_at.map(|dt| dt.to_rfc3339()),
+            last_synced_at: value.last_synced_at.map(|dt| dt.to_rfc3339()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RateRes {
+    pub id: Uuid,
+    pub rate_type: String,
+    /// Serialized as string to preserve BigDecimal precision.
+    pub amount: String,
+}
+
+impl From<Rate> for RateRes {
+    fn from(value: Rate) -> Self {
+        Self {
+            id: value.id,
+            rate_type: value.rate_type,
+            amount: value.amount.to_string(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreatorProfileWithDetailsRes {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    pub bio: String,
+    pub niche: String,
+    pub avatar_url: String,
+    pub username: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub social_handles: Vec<SocialHandleRes>,
+    pub rates: Vec<RateRes>,
+}
+
+impl From<ProfileWithDetails> for CreatorProfileWithDetailsRes {
+    fn from(value: ProfileWithDetails) -> Self {
+        Self {
+            id: value.profile.id,
+            user_id: value.profile.user_id,
+            name: value.profile.name,
+            bio: value.profile.bio,
+            niche: value.profile.niche,
+            avatar_url: value.profile.avatar_url,
+            username: value.profile.username,
+            created_at: value.profile.created_at.map(|dt| dt.to_rfc3339()),
+            updated_at: value.profile.updated_at.map(|dt| dt.to_rfc3339()),
+            social_handles: value.social_handles.into_iter().map(SocialHandleRes::from).collect(),
+            rates: value.rates.into_iter().map(RateRes::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateCreatorProfileReq {
     pub name: String,
     pub bio: String,
@@ -57,7 +137,7 @@ pub struct UpdateCreatorProfileReq {
     get,
     path = "/user/profile",
     responses(
-        (status = 200, description = "Current user profile", body = CreatorProfileRes),
+        (status = 200, description = "Current user profile with details", body = CreatorProfileWithDetailsRes),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Profile not found"),
         (status = 500, description = "Internal server error")
@@ -71,8 +151,8 @@ pub async fn get_my_profile(
     State(service): State<ProfileService<ProfileRepository>>,
 ) -> impl IntoResponse {
     info!(user_id = %auth_user.user_id, "Get my profile request");
-    match service.get_profile_by_user_id(auth_user.user_id).await {
-        Ok(profile) => Json(CreatorProfileRes::from(profile)).into_response(),
+    match service.get_profile_with_details_by_user_id(auth_user.user_id).await {
+        Ok(details) => Json(CreatorProfileWithDetailsRes::from(details)).into_response(),
         Err(ProfileServiceError::ProfileNotFound) => {
             warn!(user_id = %auth_user.user_id, "Profile not found");
             (StatusCode::NOT_FOUND, "Profile not found").into_response()
@@ -146,14 +226,18 @@ mod tests {
     use crate::session::repository::session_repository::{SessionRepository, SessionRepositoryTrait};
     use crate::session::usecase::session_service::SessionService;
     use crate::user::http::user_controller::CreateUserRes;
-    use crate::user::repository::profile_repository::{ProfileRepositoryTrait, ProfileRepository};
+    use crate::user::repository::profile_repository::{
+        ProfileRepository, ProfileRepositoryTrait, RateInput, SocialHandleInput,
+    };
     use crate::user::repository::user_repository::{UserRepository, UserRepositoryTrait};
     use crate::user::usecase::user_service::UserService;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::post;
+    use bigdecimal::BigDecimal;
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
     use http_body_util::BodyExt;
+    use std::str::FromStr;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -299,10 +383,12 @@ mod tests {
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let res: CreatorProfileRes = serde_json::from_slice(&body).unwrap();
+        let res: CreatorProfileWithDetailsRes = serde_json::from_slice(&body).unwrap();
         assert_eq!(res.user_id, created.id);
         assert_eq!(res.name, "Alice");
         assert_eq!(res.username, "alice");
+        assert!(res.social_handles.is_empty());
+        assert!(res.rates.is_empty());
     }
 
     #[tokio::test]
@@ -430,5 +516,65 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_get_my_profile_with_details() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+        let created = create_user(&app, "profile_details@example.com").await;
+
+        let profile_repo = ProfileRepository::new(pool.clone());
+        let details = profile_repo
+            .create_with_details(
+                created.id,
+                "Bob".to_string(),
+                "Lifestyle creator".to_string(),
+                "lifestyle".to_string(),
+                "https://example.com/bob.png".to_string(),
+                "bob_creator".to_string(),
+                vec![SocialHandleInput {
+                    platform: "instagram".to_string(),
+                    handle: "@bob".to_string(),
+                    url: "https://instagram.com/bob".to_string(),
+                    follower_count: 10000,
+                }],
+                vec![RateInput {
+                    rate_type: "post".to_string(),
+                    amount: BigDecimal::from_str("250.00").unwrap(),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/user/profile")
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let res: CreatorProfileWithDetailsRes = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(res.user_id, created.id);
+        assert_eq!(res.name, "Bob");
+        assert_eq!(res.username, "bob_creator");
+
+        assert_eq!(res.social_handles.len(), 1);
+        let sh = &res.social_handles[0];
+        assert_eq!(sh.platform, "instagram");
+        assert_eq!(sh.handle, "@bob");
+        assert_eq!(sh.url, "https://instagram.com/bob");
+        assert_eq!(sh.follower_count, 10000);
+        assert_eq!(sh.id, details.social_handles[0].id);
+
+        assert_eq!(res.rates.len(), 1);
+        let rate = &res.rates[0];
+        assert_eq!(rate.rate_type, "post");
+        assert_eq!(rate.amount, "250.00");
+        assert_eq!(rate.id, details.rates[0].id);
     }
 }
