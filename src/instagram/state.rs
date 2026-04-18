@@ -47,7 +47,7 @@ pub fn issue_state_cookie(user_id: Uuid, jwt_secret: &[u8]) -> (String, Cookie<'
     .expect("state token encoding should not fail");
 
     let cookie = Cookie::build((OAUTH_STATE_COOKIE_NAME, token))
-        .path("/oauth/instagram/callback")
+        .path("/oauth/instagram")
         .http_only(true)
         .same_site(SameSite::Lax)
         .secure(!cfg!(debug_assertions))
@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(cookie.name(), OAUTH_STATE_COOKIE_NAME);
         assert_eq!(cookie.http_only(), Some(true));
         assert_eq!(cookie.same_site(), Some(SameSite::Lax));
-        assert_eq!(cookie.path(), Some("/oauth/instagram/callback"));
+        assert_eq!(cookie.path(), Some("/oauth/instagram"));
 
         let verified_user_id =
             verify_state_cookie(&state, cookie.value(), SECRET).expect("state should verify");
