@@ -228,12 +228,13 @@ async fn main() {
     // Build S3 client
     let mut s3_config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(config.s3.region.clone()));
+    let has_custom_endpoint = config.s3.endpoint_url.is_some();
     if let Some(ref endpoint) = config.s3.endpoint_url {
         s3_config_builder = s3_config_builder.endpoint_url(endpoint);
     }
     let aws_cfg = s3_config_builder.load().await;
     let mut s3_builder = aws_sdk_s3::config::Builder::from(&aws_cfg);
-    if config.s3.endpoint_url.is_some() {
+    if has_custom_endpoint {
         s3_builder = s3_builder.force_path_style(true);
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_builder.build());
