@@ -152,20 +152,14 @@ pub async fn login_user(
                 }
             }
         }
-        Err(err) => match err {
-            ServiceError::UserNotFound | ServiceError::InvalidCredentials => {
-                warn!("Login failed: invalid credentials");
-                (StatusCode::UNAUTHORIZED, "Invalid email or password").into_response()
-            }
-            ServiceError::RepositoryError(_) | ServiceError::HashError(_) => {
-                error!(error = %err, "Login failed due to internal error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
-            }
-            ServiceError::StorageError(_) | ServiceError::StorageNotConfigured => {
-                error!(error = %err, "Login failed due to internal error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
-            }
-        },
+        Err(ServiceError::UserNotFound | ServiceError::InvalidCredentials) => {
+            warn!("Login failed: invalid credentials");
+            (StatusCode::UNAUTHORIZED, "Invalid email or password").into_response()
+        }
+        Err(err) => {
+            error!(error = %err, "Login failed due to internal error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Login failed").into_response()
+        }
     }
 }
 

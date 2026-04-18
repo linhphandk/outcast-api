@@ -123,7 +123,7 @@ impl<R: UserRepositoryTrait> UserService<R> {
             .as_ref()
             .ok_or(ServiceError::StorageNotConfigured)?;
         let key = format!("avatars/{user_id}");
-        let avatar_url = storage.as_ref().upload(&key, data, content_type).await?;
+        let avatar_url = storage.upload(&key, data, content_type).await?;
         self.repository
             .update_avatar_url(user_id, &avatar_url)
             .await
