@@ -57,6 +57,37 @@ struct IgBusinessAccount {
     id: String,
 }
 
+/// A single media item returned by the Instagram Graph API
+/// (`GET /{ig-user-id}/media?fields=…`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct MediaItem {
+    pub id: String,
+    pub like_count: Option<i64>,
+    pub comments_count: Option<i64>,
+    pub timestamp: Option<String>,
+    pub media_type: Option<String>,
+}
+
+/// Summary of recent media items with pre-computed engagement metrics.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct RecentMediaSummary {
+    /// The individual media items returned by the API.
+    pub items: Vec<MediaItem>,
+    /// Sum of `like_count` across all items.
+    pub total_likes: i64,
+    /// Sum of `comments_count` across all items.
+    pub total_comments: i64,
+    /// Average engagement per post: `(total_likes + total_comments) / post_count`.
+    /// Returns `0.0` when no items are present.
+    pub engagement_rate: f64,
+}
+
+/// Envelope returned by `GET /{ig-user-id}/media`.
+#[derive(Debug, serde::Deserialize)]
+struct MediaResponse {
+    data: Vec<MediaItem>,
+}
+
 /// Profile statistics returned by the Instagram Graph API for a Business or
 /// Creator account (`GET /{ig-user-id}?fields=…`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -283,6 +314,75 @@ impl IgClient {
             .append_pair("access_token", token);
         url
     }
+
+    /// Fetch the most recent media items for an Instagram Business / Creator
+    /// account and compute engagement metrics.
+    ///
+    /// Calls `GET /{ig_user_id}/media?fields=id,like_count,comments_count,
+    /// timestamp,media_type&limit={limit}` on the Facebook Graph API.
+    ///
+    /// The returned [`RecentMediaSummary`] contains the raw items together with
+    /// pre-computed totals and an average engagement rate per post.
+    pub async fn fetch_recent_media(
+        &self,
+        token: &str,
+        ig_user_id: &str,
+        limit: u32,
+    ) -> Result<RecentMediaSummary, IgError> {
+        let res = self
+            .http
+            .get(self.build_recent_media_url(token, ig_user_id, limit).to_string())
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        let media: MediaResponse = serde_json::from_str(&body)?;
+
+        let total_likes: i64 = media.data.iter().filter_map(|m| m.like_count).sum();
+        let total_comments: i64 = media.data.iter().filter_map(|m| m.comments_count).sum();
+        let post_count = media.data.len() as f64;
+        let engagement_rate = if post_count > 0.0 {
+            (total_likes + total_comments) as f64 / post_count
+        } else {
+            0.0
+        };
+
+        Ok(RecentMediaSummary {
+            items: media.data,
+            total_likes,
+            total_comments,
+            engagement_rate,
+        })
+    }
+
+    fn build_recent_media_url(
+        &self,
+        token: &str,
+        ig_user_id: &str,
+        limit: u32,
+    ) -> url::Url {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/{}/media",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, ig_user_id
+        ))
+        .expect("BUG: Failed to construct Facebook Graph recent media URL");
+
+        url.query_pairs_mut()
+            .append_pair(
+                "fields",
+                "id,like_count,comments_count,timestamp,media_type",
+            )
+            .append_pair("limit", &limit.to_string())
+            .append_pair("access_token", token);
+        url
+    }
 }
 
 #[cfg(test)]
@@ -290,9 +390,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CodeExchange, IgBusinessAccountResponse, IgClient, PagesResponse, ProfileStats,
-        SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS,
-        SCOPE_PAGES_SHOW_LIST,
+        CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse,
+        PagesResponse, ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT,
+        SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -552,5 +652,158 @@ mod tests {
         assert!(parsed.media_count.is_none());
         assert!(parsed.profile_picture_url.is_none());
         assert!(parsed.website.is_none());
+    }
+
+    #[test]
+    fn build_recent_media_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_recent_media_url("my-token", "17841400000000001", 20);
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
+        assert_eq!(parsed.path(), "/v19.0/17841400000000001/media");
+        assert_eq!(
+            query.get("fields"),
+            Some(&"id,like_count,comments_count,timestamp,media_type".to_string())
+        );
+        assert_eq!(query.get("limit"), Some(&"20".to_string()));
+        assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
+    }
+
+    #[test]
+    fn media_response_parses_full_response() {
+        let raw = r#"{
+            "data": [
+                {
+                    "id": "media1",
+                    "like_count": 100,
+                    "comments_count": 10,
+                    "timestamp": "2026-04-01T12:00:00+0000",
+                    "media_type": "IMAGE"
+                },
+                {
+                    "id": "media2",
+                    "like_count": 200,
+                    "comments_count": 20,
+                    "timestamp": "2026-04-02T12:00:00+0000",
+                    "media_type": "VIDEO"
+                }
+            ]
+        }"#;
+
+        let parsed: MediaResponse = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.data.len(), 2);
+        assert_eq!(parsed.data[0].id, "media1");
+        assert_eq!(parsed.data[0].like_count, Some(100));
+        assert_eq!(parsed.data[0].comments_count, Some(10));
+        assert_eq!(parsed.data[0].timestamp.as_deref(), Some("2026-04-01T12:00:00+0000"));
+        assert_eq!(parsed.data[0].media_type.as_deref(), Some("IMAGE"));
+        assert_eq!(parsed.data[1].id, "media2");
+        assert_eq!(parsed.data[1].like_count, Some(200));
+        assert_eq!(parsed.data[1].comments_count, Some(20));
+    }
+
+    #[test]
+    fn media_response_parses_minimal_items() {
+        let raw = r#"{ "data": [{ "id": "media1" }] }"#;
+        let parsed: MediaResponse = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.data.len(), 1);
+        assert_eq!(parsed.data[0].id, "media1");
+        assert!(parsed.data[0].like_count.is_none());
+        assert!(parsed.data[0].comments_count.is_none());
+        assert!(parsed.data[0].timestamp.is_none());
+        assert!(parsed.data[0].media_type.is_none());
+    }
+
+    #[test]
+    fn media_response_parses_empty_data() {
+        let raw = r#"{ "data": [] }"#;
+        let parsed: MediaResponse = serde_json::from_str(raw).expect("should parse");
+        assert!(parsed.data.is_empty());
+    }
+
+    #[test]
+    fn engagement_rate_computed_correctly_for_multiple_items() {
+        let items = vec![
+            MediaItem {
+                id: "1".to_string(),
+                like_count: Some(100),
+                comments_count: Some(10),
+                timestamp: None,
+                media_type: None,
+            },
+            MediaItem {
+                id: "2".to_string(),
+                like_count: Some(200),
+                comments_count: Some(20),
+                timestamp: None,
+                media_type: None,
+            },
+        ];
+
+        let total_likes: i64 = items.iter().filter_map(|m| m.like_count).sum();
+        let total_comments: i64 = items.iter().filter_map(|m| m.comments_count).sum();
+        let post_count = items.len() as f64;
+        let engagement_rate = (total_likes + total_comments) as f64 / post_count;
+
+        let summary = RecentMediaSummary {
+            items,
+            total_likes,
+            total_comments,
+            engagement_rate,
+        };
+
+        assert_eq!(summary.total_likes, 300);
+        assert_eq!(summary.total_comments, 30);
+        assert!((summary.engagement_rate - 165.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn engagement_rate_zero_for_empty_items() {
+        let summary = RecentMediaSummary {
+            items: vec![],
+            total_likes: 0,
+            total_comments: 0,
+            engagement_rate: 0.0,
+        };
+
+        assert!((summary.engagement_rate - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn engagement_rate_handles_missing_counts() {
+        let items = vec![
+            MediaItem {
+                id: "1".to_string(),
+                like_count: Some(50),
+                comments_count: None,
+                timestamp: None,
+                media_type: None,
+            },
+            MediaItem {
+                id: "2".to_string(),
+                like_count: None,
+                comments_count: Some(10),
+                timestamp: None,
+                media_type: None,
+            },
+        ];
+
+        let total_likes: i64 = items.iter().filter_map(|m| m.like_count).sum();
+        let total_comments: i64 = items.iter().filter_map(|m| m.comments_count).sum();
+        let post_count = items.len() as f64;
+        let engagement_rate = (total_likes + total_comments) as f64 / post_count;
+
+        let summary = RecentMediaSummary {
+            items,
+            total_likes,
+            total_comments,
+            engagement_rate,
+        };
+
+        assert_eq!(summary.total_likes, 50);
+        assert_eq!(summary.total_comments, 10);
+        assert!((summary.engagement_rate - 30.0).abs() < f64::EPSILON);
     }
 }
