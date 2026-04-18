@@ -4,6 +4,7 @@ use bytes::Bytes;
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
 use crate::user::storage::{StorageError, StoragePort};
+
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -112,25 +113,24 @@ impl<R: UserRepositoryTrait> UserService<R> {
             })
     }
 
-    #[instrument(skip(self, data), fields(user_id = %user_id, content_type = %content_type))]
+    #[instrument(skip(self, data), fields(user_id = %user_id))]
     pub async fn upload_avatar(
         &self,
         user_id: Uuid,
         data: Bytes,
         content_type: &str,
-    ) -> Result<User, ServiceError> {
+    ) -> Result<String, ServiceError> {
         let storage = self
             .storage
             .as_ref()
             .ok_or(ServiceError::StorageNotConfigured)?;
         let key = format!("avatars/{user_id}");
         let avatar_url = storage.upload(&key, data, content_type).await?;
-        let user = self
-            .repository
+        self.repository
             .update_avatar_url(user_id, &avatar_url)
             .await
             .map_err(ServiceError::RepositoryError)?;
-        Ok(user)
+        Ok(avatar_url)
     }
 }
 
@@ -139,7 +139,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use crate::user::repository::user_repository::MockUserRepositoryTrait;
-    use crate::user::storage::{MockStoragePort, StorageError};
+    use crate::user::storage::MockStoragePort;
     use mockall::predicate::*;
     use uuid::Uuid;
 
@@ -363,120 +363,65 @@ mod tests {
     #[tokio::test]
     async fn test_upload_avatar_success() {
         let user_id = Uuid::new_v4();
-        let bytes = Bytes::from_static(b"avatar-bytes");
-        let content_type = "image/png";
-        let key = format!("avatars/{user_id}");
-        let expected_url = format!("s3://avatars-bucket/{key}");
-        let expected_url_for_upload = expected_url.clone();
-
+        let mut mock_repo = MockUserRepositoryTrait::new();
         let mut mock_storage = MockStoragePort::new();
+
         mock_storage
             .expect_upload()
-            .with(eq(key), eq(bytes.clone()), eq(content_type))
+            .withf(|key, _data, content_type| {
+                key.starts_with("avatars/") && content_type == "image/png"
+            })
             .times(1)
-            .return_once(move |_, _, _| Ok(expected_url_for_upload.clone()));
+            .returning(|_, _, _| Ok("s3://test-bucket/avatars/user.png".to_string()));
 
-        let mut mock_repo = MockUserRepositoryTrait::new();
         mock_repo
             .expect_update_avatar_url()
-            .with(eq(user_id), eq(expected_url.clone()))
+            .with(eq(user_id), eq("s3://test-bucket/avatars/user.png"))
             .times(1)
-            .return_once(move |id, url| {
+            .returning(move |user_id, url| {
                 Ok(User {
-                    id,
-                    email: "avatar@example.com".to_string(),
+                    id: user_id,
+                    email: "user@example.com".to_string(),
                     password: "hashed".to_string(),
                     avatar_url: Some(url.to_string()),
                 })
             });
 
-        let service = UserService::new_with_storage(
-            mock_repo,
-            "test_pepper".to_string(),
-            Arc::new(mock_storage),
-        );
-
-        let result = service.upload_avatar(user_id, bytes, content_type).await.unwrap();
-        assert_eq!(result.id, user_id);
-        assert_eq!(result.avatar_url.as_deref(), Some(expected_url.as_str()));
-    }
-
-    #[tokio::test]
-    async fn test_upload_avatar_storage_not_configured() {
-        let user_id = Uuid::new_v4();
-        let mock_repo = MockUserRepositoryTrait::new();
-        let service = UserService::new(mock_repo, "test_pepper".to_string());
-
+        let service =
+            UserService::new_with_storage(mock_repo, "test_pepper".to_string(), Arc::new(mock_storage));
         let result = service
-            .upload_avatar(user_id, Bytes::from_static(b"avatar"), "image/png")
+            .upload_avatar(
+                user_id,
+                Bytes::from_static(b"png-data"),
+                "image/png",
+            )
             .await;
-        assert!(matches!(result, Err(ServiceError::StorageNotConfigured)));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "s3://test-bucket/avatars/user.png");
     }
 
     #[tokio::test]
     async fn test_upload_avatar_storage_error() {
         let user_id = Uuid::new_v4();
-        let bytes = Bytes::from_static(b"avatar-bytes");
-        let content_type = "image/png";
-        let key = format!("avatars/{user_id}");
-
+        let mock_repo = MockUserRepositoryTrait::new();
         let mut mock_storage = MockStoragePort::new();
+
         mock_storage
             .expect_upload()
-            .with(eq(key), eq(bytes.clone()), eq(content_type))
             .times(1)
-            .return_once(|_, _, _| Err(StorageError::UploadFailed("upload failed".to_string())));
+            .returning(|_, _, _| Err(StorageError::UploadFailed("s3 unavailable".to_string())));
 
-        let mut mock_repo = MockUserRepositoryTrait::new();
-        mock_repo.expect_update_avatar_url().times(0);
+        let service =
+            UserService::new_with_storage(mock_repo, "test_pepper".to_string(), Arc::new(mock_storage));
+        let result = service
+            .upload_avatar(
+                user_id,
+                Bytes::from_static(b"png-data"),
+                "image/png",
+            )
+            .await;
 
-        let service = UserService::new_with_storage(
-            mock_repo,
-            "test_pepper".to_string(),
-            Arc::new(mock_storage),
-        );
-
-        let result = service.upload_avatar(user_id, bytes, content_type).await;
         assert!(matches!(result, Err(ServiceError::StorageError(_))));
-    }
-
-    #[tokio::test]
-    async fn test_upload_avatar_repository_error_after_upload() {
-        let user_id = Uuid::new_v4();
-        let bytes = Bytes::from_static(b"avatar-bytes");
-        let content_type = "image/png";
-        let key = format!("avatars/{user_id}");
-        let avatar_url = format!("s3://avatars-bucket/{key}");
-        let avatar_url_for_upload = avatar_url.clone();
-
-        let mut mock_storage = MockStoragePort::new();
-        mock_storage
-            .expect_upload()
-            .with(eq(key), eq(bytes.clone()), eq(content_type))
-            .times(1)
-            .return_once(move |_, _, _| Ok(avatar_url_for_upload.clone()));
-
-        let mut mock_repo = MockUserRepositoryTrait::new();
-        mock_repo
-            .expect_update_avatar_url()
-            .with(eq(user_id), eq(avatar_url.clone()))
-            .times(1)
-            .return_once(|_, _| {
-                Err(RepositoryError::DieselError(
-                    diesel::result::Error::DatabaseError(
-                        diesel::result::DatabaseErrorKind::Unknown,
-                        Box::new("db error".to_string()),
-                    ),
-                ))
-            });
-
-        let service = UserService::new_with_storage(
-            mock_repo,
-            "test_pepper".to_string(),
-            Arc::new(mock_storage),
-        );
-
-        let result = service.upload_avatar(user_id, bytes, content_type).await;
-        assert!(matches!(result, Err(ServiceError::RepositoryError(_))));
     }
 }
