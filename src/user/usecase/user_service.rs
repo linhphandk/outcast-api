@@ -140,7 +140,6 @@ mod tests {
     use bytes::Bytes;
     use crate::user::repository::user_repository::MockUserRepositoryTrait;
     use crate::user::storage::MockStoragePort;
-    use bytes::Bytes;
     use mockall::predicate::*;
     use uuid::Uuid;
 
