@@ -18,7 +18,8 @@ use utoipa::OpenApi;
         crate::user::http::profile_controller::update_my_profile,
         crate::instagram::http::instagram_authorize,
         crate::instagram::http::instagram_callback,
-        crate::instagram::http::disconnect_instagram
+        crate::instagram::http::disconnect_instagram,
+        crate::instagram::http::refresh_instagram
     ),
     components(
         schemas(
@@ -34,7 +35,8 @@ use utoipa::OpenApi;
             crate::user::http::profile_controller::SocialHandleInputReq,
             crate::user::http::profile_controller::RateInputReq,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
-            crate::instagram::http::InstagramCallbackQuery
+            crate::instagram::http::InstagramCallbackQuery,
+            crate::instagram::http::InstagramSocialHandleRes
         )
     ),
     tags(

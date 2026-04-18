@@ -50,6 +50,12 @@ pub struct OAuthTokenRepository {
 
 #[async_trait]
 pub trait OAuthTokenRepositoryTrait: Send + Sync {
+    async fn find_by_profile_and_provider(
+        &self,
+        profile_id: Uuid,
+        provider: &str,
+    ) -> Result<Option<OAuthToken>, OAuthTokenRepositoryError>;
+
     async fn upsert(
         &self,
         profile_id: Uuid,
@@ -76,6 +82,39 @@ impl OAuthTokenRepository {
 
 #[async_trait]
 impl OAuthTokenRepositoryTrait for OAuthTokenRepository {
+    #[instrument(skip(self), fields(profile_id = %profile_id, provider = %provider))]
+    async fn find_by_profile_and_provider(
+        &self,
+        profile_id: Uuid,
+        provider: &str,
+    ) -> Result<Option<OAuthToken>, OAuthTokenRepositoryError> {
+        info!("Finding oauth token by profile and provider");
+
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            OAuthTokenRepositoryError::PoolError(e)
+        })?;
+
+        let provider = provider.to_string();
+
+        conn.interact(move |conn| {
+            oauth_tokens::table
+                .filter(oauth_tokens::profile_id.eq(profile_id))
+                .filter(oauth_tokens::provider.eq(provider))
+                .first::<OAuthToken>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during oauth token lookup");
+            OAuthTokenRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during oauth token lookup");
+            OAuthTokenRepositoryError::DieselError(e)
+        })
+    }
+
     #[instrument(
         skip(self, access_token, refresh_token, provider_user_id, scopes),
         fields(profile_id = %profile_id, provider = %provider)

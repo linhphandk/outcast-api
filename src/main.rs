@@ -46,6 +46,7 @@ use uuid::Uuid;
         crate::instagram::http::instagram_authorize,
         crate::instagram::http::instagram_callback,
         crate::instagram::http::disconnect_instagram,
+        crate::instagram::http::refresh_instagram,
     ),
     components(
         schemas(
@@ -63,6 +64,7 @@ use uuid::Uuid;
             crate::user::http::profile_controller::RateInputReq,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
             crate::instagram::http::InstagramCallbackQuery,
+            crate::instagram::http::InstagramSocialHandleRes,
         )
     ),
     tags(
@@ -230,8 +232,11 @@ async fn main() {
     let profile_repository = ProfileRepository::new(diesel_pool.clone());
     let instagram_oauth_repository = OAuthTokenRepository::new(diesel_pool.clone());
     let instagram_client = IgClient::new(config.instagram.clone());
-    let instagram_service =
-        InstagramService::new(instagram_client.clone(), instagram_oauth_repository.clone());
+    let instagram_service = InstagramService::new_with_profile_repository(
+        instagram_client.clone(),
+        instagram_oauth_repository.clone(),
+        profile_repository.clone(),
+    );
     let session_repository: Arc<dyn SessionRepositoryTrait> =
         Arc::new(SessionRepository::new(diesel_pool.clone()));
     let session_user_repository: Arc<dyn UserRepositoryTrait> =

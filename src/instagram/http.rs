@@ -1,21 +1,26 @@
 use axum::{
+    Json,
     Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
-    routing::get,
+    routing::{get, post},
 };
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, instrument, warn};
 
 use crate::instagram::{
+    error::IgError,
     service::InstagramService,
+    service::InstagramSyncError,
     state::{OAUTH_STATE_COOKIE_NAME, issue_state_cookie, verify_state_cookie},
 };
 use crate::user::http::auth_extractor::AuthUser;
-use crate::user::repository::profile_repository::{ProfileRepository, ProfileRepositoryTrait};
+use crate::user::repository::profile_repository::{
+    ProfileRepository, ProfileRepositoryTrait, SocialHandle,
+};
 
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
 const EMPTY_PROVIDER_USER_ID: &str = "";
@@ -25,6 +30,29 @@ const EMPTY_SCOPES: &str = "";
 pub struct InstagramCallbackQuery {
     code: String,
     state: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct InstagramSocialHandleRes {
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+    pub engagement_rate: String,
+    pub last_synced_at: Option<String>,
+}
+
+impl From<SocialHandle> for InstagramSocialHandleRes {
+    fn from(value: SocialHandle) -> Self {
+        Self {
+            platform: value.platform,
+            handle: value.handle,
+            url: value.url,
+            follower_count: value.follower_count,
+            engagement_rate: value.engagement_rate.to_string(),
+            last_synced_at: value.last_synced_at.map(|v| v.to_rfc3339()),
+        }
+    }
 }
 
 #[utoipa::path(
@@ -202,6 +230,58 @@ pub async fn disconnect_instagram(
     StatusCode::NO_CONTENT
 }
 
+#[utoipa::path(
+    post,
+    path = "/oauth/instagram/refresh",
+    responses(
+        (status = 200, description = "Instagram social handle refreshed", body = InstagramSocialHandleRes),
+        (status = 401, description = "Unauthorized"),
+        (status = 429, description = "Rate limited by Instagram"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Instagram OAuth"
+)]
+#[instrument(skip_all)]
+pub async fn refresh_instagram(
+    auth_user: AuthUser,
+    State(profile_repo): State<ProfileRepository>,
+    State(instagram_service): State<InstagramService>,
+) -> impl IntoResponse {
+    let profile_id = match profile_repo.find_by_user_id(auth_user.user_id).await {
+        Ok(Some(profile)) => profile.id,
+        Ok(None) => {
+            warn!(user_id = %auth_user.user_id, "Instagram refresh: profile not found");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to resolve profile").into_response();
+        }
+        Err(err) => {
+            error!(error = %err, user_id = %auth_user.user_id, "Failed to resolve profile for Instagram refresh");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to resolve profile").into_response();
+        }
+    };
+
+    match instagram_service.sync_profile(profile_id).await {
+        Ok(social_handle) => (
+            StatusCode::OK,
+            Json(InstagramSocialHandleRes::from(social_handle)),
+        )
+            .into_response(),
+        Err(InstagramSyncError::Instagram(IgError::Unauthorized)) => {
+            (StatusCode::UNAUTHORIZED, "Instagram account unauthorized").into_response()
+        }
+        Err(InstagramSyncError::Instagram(IgError::RateLimited { .. })) => {
+            (StatusCode::TOO_MANY_REQUESTS, "Instagram rate limited").into_response()
+        }
+        Err(InstagramSyncError::NotConnected) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Instagram account not connected").into_response()
+        }
+        Err(err) => {
+            error!(error = %err, profile_id = %profile_id, "Instagram refresh failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Instagram refresh failed").into_response()
+        }
+    }
+}
+
 pub fn router<S>() -> Router<S>
 where
     String: axum::extract::FromRef<S>,
@@ -214,6 +294,7 @@ where
     Router::new()
         .route("/", get(instagram_authorize).delete(disconnect_instagram))
         .route("/callback", get(instagram_callback))
+        .route("/refresh", post(refresh_instagram))
 }
 
 #[cfg(test)]
