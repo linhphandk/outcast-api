@@ -18,6 +18,8 @@ use crate::instagram::{
 use crate::user::repository::profile_repository::{ProfileRepository, ProfileRepositoryTrait};
 
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
+const EMPTY_PROVIDER_USER_ID: &str = "";
+const EMPTY_SCOPES: &str = "";
 
 #[derive(Debug, Deserialize)]
 pub struct InstagramCallbackQuery {
@@ -99,8 +101,8 @@ pub async fn instagram_callback(
             &long.access_token,
             None,
             expires_at,
-            "",
-            "",
+            EMPTY_PROVIDER_USER_ID,
+            EMPTY_SCOPES,
         )
         .await
     {
@@ -169,7 +171,7 @@ mod tests {
 
     fn test_state() -> TestState {
         let manager = deadpool_diesel::postgres::Manager::new(
-            "postgres://postgres:postgres@127.0.0.1:1/postgres",
+            "postgres://postgres:postgres@127.0.0.1:5432/postgres",
             deadpool_diesel::Runtime::Tokio1,
         );
         let pool = deadpool_diesel::postgres::Pool::builder(manager)
