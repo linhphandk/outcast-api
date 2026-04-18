@@ -4,6 +4,7 @@ use crate::instagram::error::IgError;
 
 const FACEBOOK_OAUTH_HOST: &str = "www.facebook.com";
 const FACEBOOK_GRAPH_HOST: &str = "graph.facebook.com";
+const INSTAGRAM_GRAPH_HOST: &str = "graph.instagram.com";
 pub const SCOPE_INSTAGRAM_BASIC: &str = "instagram_basic";
 pub const SCOPE_INSTAGRAM_MANAGE_INSIGHTS: &str = "instagram_manage_insights";
 pub const SCOPE_PAGES_SHOW_LIST: &str = "pages_show_list";
@@ -68,6 +69,23 @@ impl IgClient {
         Ok(serde_json::from_str(&body)?)
     }
 
+    pub async fn exchange_for_long_lived(&self, short: &str) -> Result<CodeExchange, IgError> {
+        let res = self
+            .http
+            .get(self.build_long_lived_exchange_url(short))
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
     fn build_exchange_url(&self, code: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
             "https://{}/{}/oauth/access_token",
@@ -80,6 +98,18 @@ impl IgClient {
             .append_pair("client_secret", &self.cfg.client_secret)
             .append_pair("redirect_uri", &self.cfg.redirect_uri)
             .append_pair("code", code);
+
+        url
+    }
+
+    fn build_long_lived_exchange_url(&self, short: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!("https://{}/access_token", INSTAGRAM_GRAPH_HOST))
+            .expect("BUG: Failed to construct Instagram Graph long-lived token URL - this should never happen with valid constants");
+
+        url.query_pairs_mut()
+            .append_pair("grant_type", "ig_exchange_token")
+            .append_pair("client_secret", &self.cfg.client_secret)
+            .append_pair("access_token", short);
 
         url
     }
@@ -177,5 +207,28 @@ mod tests {
             Some(&"http://localhost:3000/oauth/instagram/callback".to_string())
         );
         assert_eq!(query.get("code"), Some(&"auth-code/unsafe?x=1".to_string()));
+    }
+
+    #[test]
+    fn build_long_lived_exchange_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_long_lived_exchange_url("short-lived-token/unsafe?x=1");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.instagram.com"));
+        assert_eq!(parsed.path(), "/access_token");
+        assert_eq!(
+            query.get("grant_type"),
+            Some(&"ig_exchange_token".to_string())
+        );
+        assert_eq!(
+            query.get("client_secret"),
+            Some(&"test-client-secret".to_string())
+        );
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"short-lived-token/unsafe?x=1".to_string())
+        );
     }
 }
