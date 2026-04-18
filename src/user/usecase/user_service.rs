@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use bytes::Bytes;
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
 use crate::user::storage::{StorageError, StoragePort};
@@ -18,7 +21,7 @@ pub enum ServiceError {
     HashError(#[from] bcrypt::BcryptError),
     #[error("Storage error: {0}")]
     StorageError(#[from] StorageError),
-    #[error("Storage not configured")]
+    #[error("Storage is not configured")]
     StorageNotConfigured,
 }
 
@@ -135,6 +138,7 @@ impl<R: UserRepositoryTrait> UserService<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use crate::user::repository::user_repository::MockUserRepositoryTrait;
     use crate::user::storage::MockStoragePort;
     use bytes::Bytes;
