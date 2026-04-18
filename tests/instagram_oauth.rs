@@ -227,7 +227,7 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
     let authorize_response = app.clone().oneshot(authorize_request).await.unwrap();
     assert_eq!(
         authorize_response.status(),
-        axum::http::StatusCode::TEMPORARY_REDIRECT
+        axum::http::StatusCode::SEE_OTHER
     );
 
     let location = authorize_response
@@ -264,7 +264,7 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
     let callback_response = app.clone().oneshot(callback_request).await.unwrap();
     assert_eq!(
         callback_response.status(),
-        axum::http::StatusCode::TEMPORARY_REDIRECT
+        axum::http::StatusCode::SEE_OTHER
     );
     assert_eq!(
         callback_response

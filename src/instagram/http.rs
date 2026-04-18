@@ -11,7 +11,6 @@ use serde::Deserialize;
 use tracing::{error, info, instrument, warn};
 
 use crate::instagram::{
-    repository::OAuthTokenRepository,
     service::InstagramService,
     state::{OAUTH_STATE_COOKIE_NAME, issue_state_cookie, verify_state_cookie},
 };
@@ -32,7 +31,7 @@ pub struct InstagramCallbackQuery {
     get,
     path = "/oauth/instagram",
     responses(
-        (status = 307, description = "Redirect to Instagram authorization page"),
+        (status = 303, description = "Redirect to Instagram authorization page"),
         (status = 401, description = "Unauthorized")
     ),
     security(("bearer_token" = [])),
@@ -59,7 +58,7 @@ pub async fn instagram_authorize(
         ("state" = String, Query, description = "OAuth state returned by Instagram OAuth")
     ),
     responses(
-        (status = 307, description = "Redirect back to dashboard after successful OAuth callback"),
+        (status = 303, description = "Redirect back to dashboard after successful OAuth callback"),
         (status = 400, description = "Invalid or missing OAuth state"),
         (status = 404, description = "Profile not found"),
         (status = 500, description = "Failed to persist OAuth token"),
@@ -222,6 +221,7 @@ mod tests {
     use super::*;
     use crate::config::InstagramConfig;
     use crate::instagram::client::IgClient;
+    use crate::instagram::repository::OAuthTokenRepository;
     use crate::instagram::repository::OAuthTokenRepositoryTrait;
     use crate::instagram::service::InstagramService;
     use crate::instagram::state::issue_state_cookie;
