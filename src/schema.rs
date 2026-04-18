@@ -76,6 +76,8 @@ diesel::table! {
         email -> Varchar,
         #[max_length = 255]
         password -> Varchar,
+        #[max_length = 512]
+        avatar_url -> Nullable<Varchar>,
     }
 }
 
