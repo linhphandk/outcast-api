@@ -15,7 +15,8 @@ use uuid::Uuid;
 use crate::user::{
     http::auth_extractor::AuthUser,
     repository::profile_repository::{
-        Profile, ProfileRepository, ProfileWithDetails, Rate, SocialHandle,
+        Profile, ProfileRepository, ProfileWithDetails, Rate, RateInput, SocialHandle,
+        SocialHandleInput,
     },
     usecase::profile_service::{ProfileService, ProfileServiceError},
 };
