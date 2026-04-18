@@ -46,7 +46,7 @@ pub async fn disconnect_instagram(
             .into_response();
     }
 
-    info!(profile_id = %profile.id, "Instagram disconnected");
+    info!(profile_id = %profile.id, "instagram disconnected");
     StatusCode::NO_CONTENT.into_response()
 }
 
