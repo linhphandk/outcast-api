@@ -3,16 +3,20 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, put},
+    routing::{get, post, put},
 };
+use bigdecimal::BigDecimal;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::user::{
     http::auth_extractor::AuthUser,
     repository::profile_repository::{
-        Profile, ProfileRepository, ProfileWithDetails, Rate, SocialHandle,
+        Profile, ProfileRepository, ProfileWithDetails, Rate, RateInput, SocialHandle,
+        SocialHandleInput,
     },
     usecase::profile_service::{ProfileService, ProfileServiceError},
 };
@@ -133,6 +137,118 @@ pub struct UpdateCreatorProfileReq {
     pub username: String,
 }
 
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct SocialHandleInputReq {
+    pub platform: String,
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct RateInputReq {
+    pub rate_type: String,
+    /// Serialized as string to preserve Numeric/BigDecimal precision.
+    pub amount: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct CreateCreatorProfileReq {
+    pub name: String,
+    pub bio: String,
+    pub niche: String,
+    pub avatar_url: String,
+    pub username: String,
+    pub social_handles: Vec<SocialHandleInputReq>,
+    pub rates: Vec<RateInputReq>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/user/profile",
+    request_body = CreateCreatorProfileReq,
+    responses(
+        (status = 201, description = "Created profile with details", body = CreatorProfileWithDetailsRes),
+        (status = 400, description = "Invalid payload"),
+        (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Conflict"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Profiles"
+)]
+#[instrument(skip_all)]
+pub async fn create_my_profile(
+    auth_user: AuthUser,
+    State(service): State<ProfileService<ProfileRepository>>,
+    Json(payload): Json<CreateCreatorProfileReq>,
+) -> impl IntoResponse {
+    info!(user_id = %auth_user.user_id, "Create my profile request");
+
+    let social_handles = payload
+        .social_handles
+        .into_iter()
+        .map(|handle| SocialHandleInput {
+            platform: handle.platform,
+            handle: handle.handle,
+            url: handle.url,
+            follower_count: handle.follower_count,
+        })
+        .collect();
+
+    let mut rates = Vec::new();
+    for rate in payload.rates {
+        let amount = match BigDecimal::from_str(&rate.amount) {
+            Ok(amount) => amount,
+            Err(_) => {
+                warn!(user_id = %auth_user.user_id, amount = %rate.amount, "Invalid amount format");
+                return (StatusCode::BAD_REQUEST, "Invalid amount format").into_response();
+            }
+        };
+        rates.push(RateInput {
+            rate_type: rate.rate_type,
+            amount,
+        });
+    }
+
+    match service
+        .add_profile(
+            auth_user.user_id,
+            payload.name,
+            payload.bio,
+            payload.niche,
+            payload.avatar_url,
+            payload.username,
+            social_handles,
+            rates,
+        )
+        .await
+    {
+        Ok(details) => (StatusCode::CREATED, Json(CreatorProfileWithDetailsRes::from(details)))
+            .into_response(),
+        Err(ProfileServiceError::RepositoryError(
+            crate::user::repository::profile_repository::ProfileRepositoryError::DieselError(
+                DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _),
+            ),
+        )) => {
+            warn!(user_id = %auth_user.user_id, "Create profile conflict");
+            (StatusCode::CONFLICT, "Profile data conflicts with existing data").into_response()
+        }
+        Err(ProfileServiceError::RepositoryError(
+            crate::user::repository::profile_repository::ProfileRepositoryError::DieselError(
+                DieselError::DatabaseError(DatabaseErrorKind::CheckViolation, _),
+            ),
+        )) => {
+            warn!(user_id = %auth_user.user_id, "Create profile validation failed");
+            (StatusCode::BAD_REQUEST, "Profile data failed validation").into_response()
+        }
+        Err(err) => {
+            error!(error = %err, user_id = %auth_user.user_id, "Create profile failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create profile").into_response()
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/user/profile",
@@ -217,6 +333,7 @@ where
 {
     Router::new()
         .route("/user/profile", get(get_my_profile))
+        .route("/user/profile", post(create_my_profile))
         .route("/user/profile", put(update_my_profile))
 }
 
@@ -509,6 +626,236 @@ mod tests {
                     "niche": "Any",
                     "avatar_url": "https://example.com/any.png",
                     "username": "any"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_create_my_profile_success() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+        let created = create_user(&app, "profile_create_ok@example.com").await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator One",
+                    "bio": "Bio One",
+                    "niche": "technology",
+                    "avatar_url": "https://example.com/creator.png",
+                    "username": "creator_one",
+                    "social_handles": [{
+                        "platform": "instagram",
+                        "handle": "@creatorone",
+                        "url": "https://instagram.com/creatorone",
+                        "follower_count": 12345
+                    }],
+                    "rates": [{
+                        "rate_type": "post",
+                        "amount": "500.00"
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let res: CreatorProfileWithDetailsRes = serde_json::from_slice(&body).unwrap();
+        assert_eq!(res.user_id, created.id);
+        assert_eq!(res.name, "Creator One");
+        assert_eq!(res.bio, "Bio One");
+        assert_eq!(res.niche, "technology");
+        assert_eq!(res.avatar_url, "https://example.com/creator.png");
+        assert_eq!(res.username, "creator_one");
+        assert_eq!(res.social_handles.len(), 1);
+        assert_eq!(res.social_handles[0].platform, "instagram");
+        assert_eq!(res.social_handles[0].handle, "@creatorone");
+        assert_eq!(res.social_handles[0].url, "https://instagram.com/creatorone");
+        assert_eq!(res.social_handles[0].follower_count, 12345);
+        assert_eq!(res.rates.len(), 1);
+        assert_eq!(res.rates[0].rate_type, "post");
+        assert_eq!(res.rates[0].amount, "500.00");
+
+        let profile_repo = ProfileRepository::new(pool.clone());
+        let profile = profile_repo.find_by_user_id(created.id).await.unwrap().unwrap();
+        assert_eq!(profile.username, "creator_one");
+
+        let handles = profile_repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+        assert_eq!(handles.len(), 1);
+        assert_eq!(handles[0].platform, "instagram");
+
+        let rates = profile_repo
+            .find_rates_by_profile_id(profile.id)
+            .await
+            .unwrap();
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0].rate_type, "post");
+        assert_eq!(rates[0].amount.to_string(), "500.00");
+    }
+
+    #[tokio::test]
+    async fn test_create_my_profile_duplicate_username_returns_conflict() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+        let created_1 = create_user(&app, "profile_create_dup1@example.com").await;
+        let created_2 = create_user(&app, "profile_create_dup2@example.com").await;
+
+        let first_request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", created_1.token))
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator A",
+                    "bio": "Bio A",
+                    "niche": "lifestyle",
+                    "avatar_url": "https://example.com/a.png",
+                    "username": "same_username",
+                    "social_handles": [],
+                    "rates": []
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let first_response = app.clone().oneshot(first_request).await.unwrap();
+        assert_eq!(first_response.status(), StatusCode::CREATED);
+
+        let second_request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", created_2.token))
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator B",
+                    "bio": "Bio B",
+                    "niche": "fashion",
+                    "avatar_url": "https://example.com/b.png",
+                    "username": "same_username",
+                    "social_handles": [],
+                    "rates": []
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let second_response = app.clone().oneshot(second_request).await.unwrap();
+        assert_eq!(second_response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_create_my_profile_duplicate_platform_rolls_back_profile() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+        let created = create_user(&app, "profile_create_dup_platform@example.com").await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator Rollback",
+                    "bio": "Rollback bio",
+                    "niche": "travel",
+                    "avatar_url": "https://example.com/rollback.png",
+                    "username": "rollback_user",
+                    "social_handles": [
+                        {
+                            "platform": "instagram",
+                            "handle": "@rollback1",
+                            "url": "https://instagram.com/rollback1",
+                            "follower_count": 100
+                        },
+                        {
+                            "platform": "instagram",
+                            "handle": "@rollback2",
+                            "url": "https://instagram.com/rollback2",
+                            "follower_count": 200
+                        }
+                    ],
+                    "rates": []
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let profile_repo = ProfileRepository::new(pool.clone());
+        let profile = profile_repo.find_by_user_id(created.id).await.unwrap();
+        assert!(profile.is_none(), "Profile row should be rolled back");
+    }
+
+    #[tokio::test]
+    async fn test_create_my_profile_invalid_rate_type_returns_bad_request_and_rolls_back() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+        let created = create_user(&app, "profile_create_invalid_rate@example.com").await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .header("Authorization", format!("Bearer {}", created.token))
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator Invalid Rate",
+                    "bio": "Bad rate",
+                    "niche": "gaming",
+                    "avatar_url": "https://example.com/badrate.png",
+                    "username": "invalid_rate_user",
+                    "social_handles": [],
+                    "rates": [{
+                        "rate_type": "invalid",
+                        "amount": "500.00"
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let profile_repo = ProfileRepository::new(pool.clone());
+        let profile = profile_repo.find_by_user_id(created.id).await.unwrap();
+        assert!(profile.is_none(), "Profile row should be rolled back");
+    }
+
+    #[tokio::test]
+    async fn test_create_my_profile_missing_token() {
+        let (_container, pool) = setup_test_db().await;
+        let app = build_app(pool.clone());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/user/profile")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "name": "Creator Missing Auth",
+                    "bio": "No auth",
+                    "niche": "music",
+                    "avatar_url": "https://example.com/noauth.png",
+                    "username": "missing_auth_user",
+                    "social_handles": [],
+                    "rates": []
                 })
                 .to_string(),
             ))
