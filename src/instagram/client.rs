@@ -56,19 +56,7 @@ impl IgClient {
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<CodeExchange, IgError> {
-        let mut url = url::Url::parse(&format!(
-            "https://{}/{}/oauth/access_token",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
-        ))
-        .expect("BUG: Failed to construct Facebook Graph token exchange URL - this should never happen with valid constants");
-
-        url.query_pairs_mut()
-            .append_pair("client_id", &self.cfg.client_id)
-            .append_pair("client_secret", &self.cfg.client_secret)
-            .append_pair("redirect_uri", &self.cfg.redirect_uri)
-            .append_pair("code", code);
-
-        let res = self.http.get(url).send().await?;
+        let res = self.http.get(self.build_exchange_url(code)).send().await?;
         if !res.status().is_success() {
             let status = res.status();
             let headers = res.headers().clone();
@@ -78,6 +66,22 @@ impl IgClient {
 
         let body = res.text().await?;
         Ok(serde_json::from_str(&body)?)
+    }
+
+    fn build_exchange_url(&self, code: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/oauth/access_token",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
+        ))
+        .expect("BUG: Failed to construct Facebook Graph token exchange URL - this should never happen with valid configuration");
+
+        url.query_pairs_mut()
+            .append_pair("client_id", &self.cfg.client_id)
+            .append_pair("client_secret", &self.cfg.client_secret)
+            .append_pair("redirect_uri", &self.cfg.redirect_uri)
+            .append_pair("code", code);
+
+        url
     }
 }
 
@@ -152,5 +156,26 @@ mod tests {
         assert_eq!(parsed.access_token, "abc123");
         assert_eq!(parsed.token_type, "bearer");
         assert_eq!(parsed.expires_in, Some(5183944));
+    }
+
+    #[test]
+    fn build_exchange_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_exchange_url("auth-code/unsafe?x=1");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
+        assert_eq!(parsed.path(), "/v19.0/oauth/access_token");
+        assert_eq!(query.get("client_id"), Some(&"test-client-id".to_string()));
+        assert_eq!(
+            query.get("client_secret"),
+            Some(&"test-client-secret".to_string())
+        );
+        assert_eq!(
+            query.get("redirect_uri"),
+            Some(&"http://localhost:3000/oauth/instagram/callback".to_string())
+        );
+        assert_eq!(query.get("code"), Some(&"auth-code/unsafe?x=1".to_string()));
     }
 }
