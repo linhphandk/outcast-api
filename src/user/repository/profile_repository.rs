@@ -54,6 +54,8 @@ pub struct SocialHandle {
     pub url: String,
     pub follower_count: i32,
     pub updated_at: Option<DateTime<Utc>>,
+    pub engagement_rate: BigDecimal,
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Insertable)]
@@ -80,6 +82,15 @@ pub struct NewRate {
     pub profile_id: Uuid,
     pub type_: String,
     pub amount: BigDecimal,
+}
+
+#[derive(AsChangeset)]
+#[diesel(table_name = social_handles)]
+pub struct UpdateSocialHandle {
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -173,6 +184,50 @@ pub trait ProfileRepositoryTrait {
         avatar_url: String,
         username: String,
     ) -> Result<Option<Profile>, ProfileRepositoryError>;
+
+    async fn find_social_handles_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<SocialHandle>, ProfileRepositoryError>;
+
+    async fn find_rates_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<Rate>, ProfileRepositoryError>;
+
+    async fn update_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+        amount: BigDecimal,
+    ) -> Result<Option<Rate>, ProfileRepositoryError>;
+
+    async fn delete_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError>;
+
+    async fn update_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<Option<SocialHandle>, ProfileRepositoryError>;
+
+    async fn delete_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError>;
+
+    async fn reset_social_handle_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -463,6 +518,244 @@ impl ProfileRepositoryTrait for ProfileRepository {
             error!(error = %e, "Diesel error during profile update by user id");
             ProfileRepositoryError::DieselError(e)
         })
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    async fn find_social_handles_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<SocialHandle>, ProfileRepositoryError> {
+        debug!("Finding social handles by profile id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            social_handles::table
+                .filter(social_handles::profile_id.eq(profile_id))
+                .order(social_handles::platform.asc())
+                .load::<SocialHandle>(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handles lookup by profile id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handles lookup by profile id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    async fn find_rates_by_profile_id(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<Rate>, ProfileRepositoryError> {
+        debug!("Finding rates by profile id");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            rates::table
+                .filter(rates::profile_id.eq(profile_id))
+                .order(rates::type_.asc())
+                .load::<Rate>(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rates lookup by profile id");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rates lookup by profile id");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self, amount), fields(rate_id = %rate_id, profile_id = %profile_id))]
+    async fn update_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+        amount: BigDecimal,
+    ) -> Result<Option<Rate>, ProfileRepositoryError> {
+        debug!("Updating rate");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::update(
+                rates::table
+                    .filter(rates::id.eq(rate_id))
+                    .filter(rates::profile_id.eq(profile_id)),
+            )
+            .set(rates::amount.eq(amount))
+            .get_result::<Rate>(conn)
+            .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rate update");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rate update");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(rate_id = %rate_id, profile_id = %profile_id))]
+    async fn delete_rate(
+        &self,
+        rate_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError> {
+        debug!("Deleting rate");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::delete(
+                rates::table
+                    .filter(rates::id.eq(rate_id))
+                    .filter(rates::profile_id.eq(profile_id)),
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during rate deletion");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during rate deletion");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|rows_affected| rows_affected > 0)
+    }
+
+    #[instrument(skip(self, handle, url), fields(handle_id = %handle_id, profile_id = %profile_id))]
+    async fn update_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<Option<SocialHandle>, ProfileRepositoryError> {
+        debug!("Updating social handle");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let update = UpdateSocialHandle {
+            handle,
+            url,
+            follower_count,
+            updated_at: Some(Utc::now()),
+        };
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::id.eq(handle_id))
+                    .filter(social_handles::profile_id.eq(profile_id)),
+            )
+            .set(&update)
+            .get_result::<SocialHandle>(conn)
+            .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle update");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle update");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(handle_id = %handle_id, profile_id = %profile_id))]
+    async fn delete_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError> {
+        debug!("Deleting social handle");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::delete(
+                social_handles::table
+                    .filter(social_handles::id.eq(handle_id))
+                    .filter(social_handles::profile_id.eq(profile_id)),
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle deletion");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle deletion");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|rows_affected| rows_affected > 0)
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, platform = %platform))]
+    async fn reset_social_handle_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError> {
+        debug!("Resetting social handle metrics by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::profile_id.eq(profile_id))
+                    .filter(social_handles::platform.eq(platform)),
+            )
+            .set((
+                social_handles::follower_count.eq(0),
+                social_handles::engagement_rate.eq(BigDecimal::from(0)),
+                social_handles::last_synced_at.eq(None::<DateTime<Utc>>),
+                social_handles::updated_at.eq(Some(Utc::now())),
+            ))
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle reset");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle reset");
+            ProfileRepositoryError::DieselError(e)
+        })?;
+
+        Ok(())
     }
 }
 
@@ -859,17 +1152,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_rate_invalid_type_fails() {
+    async fn test_add_rate_arbitrary_type_succeeds() {
         let (_container, pool) = setup_test_db().await;
         let user_id = create_test_user(&pool).await;
         let repo = ProfileRepository::new(pool);
         let profile = create_test_profile(&repo, user_id).await;
 
-        let result = repo
+        let rate = repo
             .add_rate(profile.id, "invalid_type".to_string(), BigDecimal::from(100))
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_err(), "Expected invalid rate type to fail");
+        assert_eq!(rate.profile_id, profile.id);
+        assert_eq!(rate.rate_type, "invalid_type");
+        assert_eq!(rate.amount, BigDecimal::from(100));
     }
 
     #[tokio::test]
@@ -999,5 +1295,460 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 0, "Profile should have been rolled back");
+    }
+
+    // ── find_social_handles_by_profile_id ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_find_social_handles_empty_when_none_exist() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_social_handles_returns_only_own_profile_rows() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+
+        repo.add_social_handle(
+            profile_a.id,
+            "instagram".to_string(),
+            "@alice".to_string(),
+            "https://instagram.com/alice".to_string(),
+            1_000,
+        )
+        .await
+        .unwrap();
+
+        repo.add_social_handle(
+            profile_b.id,
+            "tiktok".to_string(),
+            "@bob".to_string(),
+            "https://tiktok.com/@bob".to_string(),
+            2_000,
+        )
+        .await
+        .unwrap();
+
+        let handles_a = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+
+        assert_eq!(handles_a.len(), 1);
+        assert_eq!(handles_a[0].profile_id, profile_a.id);
+        assert_eq!(handles_a[0].platform, "instagram");
+    }
+
+    #[tokio::test]
+    async fn test_find_social_handles_ordered_by_platform() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        // Insert in reverse alphabetical order.
+        for (platform, handle, url) in [
+            ("youtube", "@alice_yt", "https://youtube.com/@alice_yt"),
+            ("tiktok", "@alice_tk", "https://tiktok.com/@alice_tk"),
+            ("instagram", "@alice_ig", "https://instagram.com/alice_ig"),
+        ] {
+            repo.add_social_handle(
+                profile.id,
+                platform.to_string(),
+                handle.to_string(),
+                url.to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+        }
+
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+
+        assert_eq!(handles.len(), 3);
+        assert_eq!(handles[0].platform, "instagram");
+        assert_eq!(handles[1].platform, "tiktok");
+        assert_eq!(handles[2].platform, "youtube");
+    }
+
+    // ── find_rates_by_profile_id ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_find_rates_empty_when_none_exist() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+
+        assert!(rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_rates_returns_only_own_profile_rows() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+
+        repo.add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        repo.add_rate(profile_b.id, "story".to_string(), BigDecimal::from(200))
+            .await
+            .unwrap();
+
+        let rates_a = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+
+        assert_eq!(rates_a.len(), 1);
+        assert_eq!(rates_a[0].profile_id, profile_a.id);
+        assert_eq!(rates_a[0].rate_type, "post");
+    }
+
+    #[tokio::test]
+    async fn test_find_rates_ordered_by_type() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        // Insert in reverse alphabetical order.
+        for (rate_type, amount) in [("story", 200), ("reel", 800), ("post", 500)] {
+            repo.add_rate(profile.id, rate_type.to_string(), BigDecimal::from(amount))
+                .await
+                .unwrap();
+        }
+
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+
+        assert_eq!(rates.len(), 3);
+        assert_eq!(rates[0].rate_type, "post");
+        assert_eq!(rates[1].rate_type, "reel");
+        assert_eq!(rates[2].rate_type, "story");
+    }
+
+    // ── update_rate ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_rate_returns_updated_rate() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let rate = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        let updated = repo
+            .update_rate(rate.id, profile.id, BigDecimal::from(750))
+            .await
+            .unwrap();
+
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.id, rate.id);
+        assert_eq!(updated.profile_id, profile.id);
+        assert_eq!(updated.rate_type, "post");
+        assert_eq!(updated.amount, BigDecimal::from(750));
+    }
+
+    #[tokio::test]
+    async fn test_update_rate_wrong_profile_id_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let rate = repo
+            .add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not touch profile_a's rate.
+        let result = repo
+            .update_rate(rate.id, profile_b.id, BigDecimal::from(999))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+
+        // Confirm the original amount is unchanged.
+        let rates = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+        assert_eq!(rates[0].amount, BigDecimal::from(500));
+    }
+
+    #[tokio::test]
+    async fn test_update_rate_nonexistent_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let result = repo
+            .update_rate(Uuid::new_v4(), profile.id, BigDecimal::from(100))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    // ── delete_rate ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_rate_returns_true() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let rate = repo
+            .add_rate(profile.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        let deleted = repo.delete_rate(rate.id, profile.id).await.unwrap();
+
+        assert!(deleted);
+        let rates = repo.find_rates_by_profile_id(profile.id).await.unwrap();
+        assert!(rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_rate_wrong_profile_id_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let rate = repo
+            .add_rate(profile_a.id, "post".to_string(), BigDecimal::from(500))
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not delete profile_a's rate.
+        let deleted = repo.delete_rate(rate.id, profile_b.id).await.unwrap();
+
+        assert!(!deleted);
+        let rates = repo.find_rates_by_profile_id(profile_a.id).await.unwrap();
+        assert_eq!(rates.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_rate_nonexistent_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let deleted = repo.delete_rate(Uuid::new_v4(), profile.id).await.unwrap();
+
+        assert!(!deleted);
+    }
+
+    // ── update_social_handle ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_social_handle_returns_updated() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let original = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        let updated = repo
+            .update_social_handle(
+                original.id,
+                profile.id,
+                "@alice_updated".to_string(),
+                "https://instagram.com/alice_updated".to_string(),
+                2_500,
+            )
+            .await
+            .unwrap();
+
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.id, original.id);
+        assert_eq!(updated.profile_id, profile.id);
+        assert_eq!(updated.platform, "instagram");
+        assert_eq!(updated.handle, "@alice_updated");
+        assert_eq!(updated.url, "https://instagram.com/alice_updated");
+        assert_eq!(updated.follower_count, 2_500);
+        assert!(updated.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_social_handle_wrong_profile_id_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let handle = repo
+            .add_social_handle(
+                profile_a.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not touch profile_a's handle.
+        let result = repo
+            .update_social_handle(
+                handle.id,
+                profile_b.id,
+                "@hacked".to_string(),
+                "https://evil.example.com".to_string(),
+                9_999,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+
+        // Confirm the original handle is unchanged.
+        let handles = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+        assert_eq!(handles[0].handle, "@alice");
+        assert_eq!(handles[0].follower_count, 1_000);
+    }
+
+    #[tokio::test]
+    async fn test_update_social_handle_nonexistent_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let result = repo
+            .update_social_handle(
+                Uuid::new_v4(),
+                profile.id,
+                "@ghost".to_string(),
+                "https://example.com/ghost".to_string(),
+                0,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    // ── delete_social_handle ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_social_handle_returns_true() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let handle = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_social_handle(handle.id, profile.id)
+            .await
+            .unwrap();
+
+        assert!(deleted);
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_social_handle_wrong_profile_id_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let handle = repo
+            .add_social_handle(
+                profile_a.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not delete profile_a's handle.
+        let deleted = repo
+            .delete_social_handle(handle.id, profile_b.id)
+            .await
+            .unwrap();
+
+        assert!(!deleted);
+        let handles = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+        assert_eq!(handles.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_social_handle_nonexistent_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let deleted = repo
+            .delete_social_handle(Uuid::new_v4(), profile.id)
+            .await
+            .unwrap();
+
+        assert!(!deleted);
     }
 }

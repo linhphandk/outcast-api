@@ -1,5 +1,5 @@
-mod config;
 pub mod schema;
+mod config;
 mod instagram;
 mod session;
 mod user;
@@ -14,6 +14,8 @@ use axum::{
 use axum_macros::debug_handler;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
+use instagram::client::IgClient;
+use instagram::repository::OAuthTokenRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use user::repository::profile_repository::ProfileRepository;
@@ -26,7 +28,6 @@ use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_scalar::{Scalar, Servable};
 use uuid::Uuid;
-use crate::config::AppConfig;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -34,7 +35,9 @@ use crate::config::AppConfig;
         crate::user::http::user_controller::create_user,
         crate::user::http::user_controller::login_user,
         crate::user::http::user_controller::get_me,
+        crate::user::http::profile_controller::create_my_profile,
         crate::user::http::profile_controller::get_my_profile,
+        crate::user::http::profile_controller::get_platforms,
         crate::user::http::profile_controller::update_my_profile,
     ),
     components(
@@ -44,6 +47,12 @@ use crate::config::AppConfig;
             crate::user::http::user_controller::LoginUserReq,
             crate::user::http::user_controller::MeRes,
             crate::user::http::profile_controller::CreatorProfileRes,
+            crate::user::http::profile_controller::CreatorProfileWithDetailsRes,
+            crate::user::http::profile_controller::SocialHandleRes,
+            crate::user::http::profile_controller::RateRes,
+            crate::user::http::profile_controller::CreateCreatorProfileReq,
+            crate::user::http::profile_controller::SocialHandleInputReq,
+            crate::user::http::profile_controller::RateInputReq,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
         )
     ),
@@ -71,8 +80,10 @@ pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
     pub profile_service: crate::user::usecase::profile_service::ProfileService<ProfileRepository>,
+    pub profile_repository: ProfileRepository,
+    pub instagram_oauth_repository: OAuthTokenRepository,
+    pub instagram_client: IgClient,
     pub jwt_secret: String,
-    pub app_config: Arc<AppConfig>,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
 }
@@ -99,6 +110,24 @@ impl axum::extract::FromRef<AppState>
     }
 }
 
+impl axum::extract::FromRef<AppState> for ProfileRepository {
+    fn from_ref(state: &AppState) -> Self {
+        state.profile_repository.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for OAuthTokenRepository {
+    fn from_ref(state: &AppState) -> Self {
+        state.instagram_oauth_repository.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for IgClient {
+    fn from_ref(state: &AppState) -> Self {
+        state.instagram_client.clone()
+    }
+}
+
 impl axum::extract::FromRef<AppState> for Arc<dyn SessionRepositoryTrait> {
     fn from_ref(state: &AppState) -> Self {
         state.session_repository.clone()
@@ -114,18 +143,6 @@ impl axum::extract::FromRef<AppState> for SessionService {
 impl axum::extract::FromRef<AppState> for String {
     fn from_ref(state: &AppState) -> Self {
         state.jwt_secret.clone()
-    }
-}
-
-impl axum::extract::FromRef<AppState> for Arc<AppConfig> {
-    fn from_ref(state: &AppState) -> Self {
-        state.app_config.clone()
-    }
-}
-
-impl axum::extract::FromRef<AppState> for crate::config::InstagramConfig {
-    fn from_ref(state: &AppState) -> Self {
-        state.app_config.instagram.clone()
     }
 }
 
@@ -171,14 +188,14 @@ async fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
-    let app_config = Arc::new(AppConfig::from_env().unwrap());
-    let pool = app_config
+    let config = crate::config::AppConfig::from_env().unwrap();
+    let pool = config
         .pg
         .create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)
         .unwrap();
 
     let diesel_manager = deadpool_diesel::postgres::Manager::new(
-        &app_config.database_url,
+        &config.database_url,
         deadpool_diesel::Runtime::Tokio1,
     );
     let diesel_pool = deadpool_diesel::postgres::Pool::builder(diesel_manager)
@@ -187,6 +204,8 @@ async fn main() {
 
     let user_repository = UserRepository::new(diesel_pool.clone());
     let profile_repository = ProfileRepository::new(diesel_pool.clone());
+    let instagram_oauth_repository = OAuthTokenRepository::new(diesel_pool.clone());
+    let instagram_client = IgClient::new(config.instagram.clone());
     let session_repository: Arc<dyn SessionRepositoryTrait> =
         Arc::new(SessionRepository::new(diesel_pool.clone()));
     let session_user_repository: Arc<dyn UserRepositoryTrait> =
@@ -194,16 +213,19 @@ async fn main() {
     let session_service = SessionService::new(session_repository.clone(), session_user_repository);
     let user_service = crate::user::usecase::user_service::UserService::new(
         user_repository,
-        app_config.password_pepper.clone(),
+        config.password_pepper,
     );
-    let profile_service = crate::user::usecase::profile_service::ProfileService::new(profile_repository);
+    let profile_service =
+        crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
 
     let state = AppState {
         pool,
         user_service,
         profile_service,
-        jwt_secret: app_config.jwt_secret.clone(),
-        app_config: app_config.clone(),
+        profile_repository,
+        instagram_oauth_repository,
+        instagram_client,
+        jwt_secret: config.jwt_secret,
         session_repository,
         session_service,
     };
@@ -214,6 +236,7 @@ async fn main() {
         .merge(crate::user::http::user_controller::router())
         .merge(crate::user::http::profile_controller::router())
         .merge(crate::session::http::session_controller::router())
+        .merge(crate::instagram::http::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(
             CorsLayer::new()
@@ -224,11 +247,11 @@ async fn main() {
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(&app_config.listen).await.unwrap();
-    info!("Server running at http://{}/", &app_config.listen);
+    let listener = tokio::net::TcpListener::bind(&config.listen).await.unwrap();
+    info!("Server running at http://{}/", &config.listen);
     info!(
         "Try the following URLs: http://{}/v1.0/event.list",
-        &app_config.listen,
+        &config.listen,
     );
     axum::serve(listener, app).await.unwrap();
 }

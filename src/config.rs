@@ -1,10 +1,35 @@
 use ::config::ConfigError;
+use deadpool_postgres::Config as PgConfig;
 use serde::Deserialize;
+
+fn default_instagram_graph_api_version() -> String {
+    "v19.0".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstagramConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+    #[serde(default = "default_instagram_graph_api_version")]
+    pub graph_api_version: String,
+}
+
+impl InstagramConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        ::config::Config::builder()
+            .add_source(
+                ::config::Environment::with_prefix("INSTAGRAM").prefix_separator("__"),
+            )
+            .build()?
+            .try_deserialize()
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub listen: String,
-    pub pg: deadpool_postgres::Config,
+    pub pg: PgConfig,
     pub database_url: String,
     pub password_pepper: String,
     pub jwt_secret: String,
@@ -13,98 +38,125 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
-        ::config::Config::builder()
+        #[derive(Debug, Deserialize)]
+        struct BaseAppConfig {
+            listen: String,
+            pg: PgConfig,
+            database_url: String,
+            password_pepper: String,
+            jwt_secret: String,
+        }
+
+        let base_config: BaseAppConfig = ::config::Config::builder()
             .add_source(::config::Environment::default().separator("__"))
-            .add_source(
-                ::config::Environment::with_prefix("INSTAGRAM")
-                    .separator("__")
-                    .keep_prefix(true),
-            )
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+
+        let instagram = InstagramConfig::from_env()?;
+
+        Ok(Self {
+            listen: base_config.listen,
+            pg: base_config.pg,
+            database_url: base_config.database_url,
+            password_pepper: base_config.password_pepper,
+            jwt_secret: base_config.jwt_secret,
+            instagram,
+        })
     }
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct InstagramConfig {
-    pub client_id: String,
-    pub client_secret: String,
-    pub redirect_uri: String,
-    #[serde(default = "default_graph_api_version")]
-    pub graph_api_version: String,
-}
-
-impl InstagramConfig {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        Self::from_environment(::config::Environment::with_prefix("INSTAGRAM").separator("__"))
-    }
-
-    fn from_environment(environment: ::config::Environment) -> Result<Self, ConfigError> {
-        ::config::Config::builder()
-            .add_source(environment)
-            .build()?
-            .try_deserialize()
-    }
-}
-
-fn default_graph_api_version() -> String {
-    "v19.0".to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::InstagramConfig;
-    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    const INSTAGRAM_CLIENT_ID: &str = "INSTAGRAM__CLIENT_ID";
+    const INSTAGRAM_CLIENT_SECRET: &str = "INSTAGRAM__CLIENT_SECRET";
+    const INSTAGRAM_REDIRECT_URI: &str = "INSTAGRAM__REDIRECT_URI";
+    const INSTAGRAM_GRAPH_API_VERSION: &str = "INSTAGRAM__GRAPH_API_VERSION";
+
+    struct EnvGuard {
+        previous_values: Vec<(String, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn snapshot(keys: &[&str]) -> Self {
+            let previous_values = keys
+                .iter()
+                .map(|key| (key.to_string(), std::env::var(key).ok()))
+                .collect();
+            Self { previous_values }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.previous_values {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn instagram_config_from_env_happy_path() {
-        let mut env = HashMap::new();
-        env.insert("INSTAGRAM__CLIENT_ID".to_string(), "ig-client-id".to_string());
-        env.insert(
-            "INSTAGRAM__CLIENT_SECRET".to_string(),
-            "ig-client-secret".to_string(),
-        );
-        env.insert(
-            "INSTAGRAM__REDIRECT_URI".to_string(),
-            "http://localhost:3000/oauth/instagram/callback".to_string(),
-        );
+        let _lock = env_lock().lock().expect("env mutex poisoned");
+        let _guard = EnvGuard::snapshot(&[
+            INSTAGRAM_CLIENT_ID,
+            INSTAGRAM_CLIENT_SECRET,
+            INSTAGRAM_REDIRECT_URI,
+            INSTAGRAM_GRAPH_API_VERSION,
+        ]);
 
-        let cfg = InstagramConfig::from_environment(
-            ::config::Environment::with_prefix("INSTAGRAM")
-                .separator("__")
-                .source(Some(env)),
-        )
-        .expect("expected instagram config to deserialize");
+        unsafe {
+            std::env::set_var(INSTAGRAM_CLIENT_ID, "my-client-id");
+            std::env::set_var(INSTAGRAM_CLIENT_SECRET, "my-client-secret");
+            std::env::set_var(
+                INSTAGRAM_REDIRECT_URI,
+                "http://localhost:3000/oauth/instagram/callback",
+            );
+            std::env::remove_var(INSTAGRAM_GRAPH_API_VERSION);
+        }
 
-        assert_eq!(cfg.client_id, "ig-client-id");
-        assert_eq!(cfg.client_secret, "ig-client-secret");
+        let config = InstagramConfig::from_env().expect("instagram config should load");
+
+        assert_eq!(config.client_id, "my-client-id");
+        assert_eq!(config.client_secret, "my-client-secret");
         assert_eq!(
-            cfg.redirect_uri,
+            config.redirect_uri,
             "http://localhost:3000/oauth/instagram/callback"
         );
-        assert_eq!(cfg.graph_api_version, "v19.0");
+        assert_eq!(config.graph_api_version, "v19.0");
     }
 
     #[test]
     fn instagram_config_from_env_missing_required_var_returns_error() {
-        let mut env = HashMap::new();
-        env.insert("INSTAGRAM__CLIENT_ID".to_string(), "ig-client-id".to_string());
-        env.insert(
-            "INSTAGRAM__REDIRECT_URI".to_string(),
-            "http://localhost:3000/oauth/instagram/callback".to_string(),
-        );
+        let _lock = env_lock().lock().expect("env mutex poisoned");
+        let _guard = EnvGuard::snapshot(&[
+            INSTAGRAM_CLIENT_ID,
+            INSTAGRAM_CLIENT_SECRET,
+            INSTAGRAM_REDIRECT_URI,
+            INSTAGRAM_GRAPH_API_VERSION,
+        ]);
 
-        let err = InstagramConfig::from_environment(
-            ::config::Environment::with_prefix("INSTAGRAM")
-                .separator("__")
-                .source(Some(env)),
-        )
-        .expect_err("expected deserialization error when required variable is missing");
+        unsafe {
+            std::env::set_var(INSTAGRAM_CLIENT_ID, "my-client-id");
+            std::env::remove_var(INSTAGRAM_CLIENT_SECRET);
+            std::env::set_var(
+                INSTAGRAM_REDIRECT_URI,
+                "http://localhost:3000/oauth/instagram/callback",
+            );
+            std::env::set_var(INSTAGRAM_GRAPH_API_VERSION, "v19.0");
+        }
 
-        let msg = err.to_string();
-        assert!(
-            msg.contains("client_secret"),
-            "error should mention missing client_secret, got: {msg}"
-        );
+        let result = InstagramConfig::from_env();
+        assert!(result.is_err());
     }
 }

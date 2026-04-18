@@ -429,7 +429,7 @@ erDiagram
     RATES {
         UUID id PK "Unique identifier (auto-generated)"
         UUID profile_id FK "Which profile this belongs to"
-        TEXT type "Rate type: post, story, or reel"
+        TEXT type "Rate type (free-form text)"
         NUMERIC_10_2 amount "Price in dollars (must be >= 0)"
     }
 
@@ -465,7 +465,7 @@ erDiagram
 - Each profile can have at most **one handle per platform** (enforced by a unique constraint).
 
 #### `rates` — Stores pricing for different content types
-- **`type`** — Must be one of: `post`, `story`, or `reel`.
+- **`type`** — Free-form text (for example: `post`, `story`, `reel`, or custom values).
 - **`amount`** — Price with up to 2 decimal places (e.g., `500.00`).
 - Each profile can have at most **one rate per type** (enforced by a unique constraint).
 
@@ -1045,8 +1045,8 @@ PG__DBNAME=postgres
 DATABASE_URL=postgres://postgres:example@localhost:5432/postgres
 PASSWORD_PEPPER=your-secret-pepper-value-here
 JWT_SECRET=your-secret-jwt-key-here
-INSTAGRAM__CLIENT_ID=
-INSTAGRAM__CLIENT_SECRET=
+INSTAGRAM__CLIENT_ID=your-instagram-client-id
+INSTAGRAM__CLIENT_SECRET=your-instagram-client-secret
 INSTAGRAM__REDIRECT_URI=http://localhost:3000/oauth/instagram/callback
 INSTAGRAM__GRAPH_API_VERSION=v19.0
 ```
@@ -1122,6 +1122,17 @@ When testing the `UserService`, we don't want to need a real database. Instead, 
 
 The application reads its configuration from environment variables. The separator for nested values is `__` (double underscore).
 
+### Instagram OAuth Setup (Meta App)
+
+1. Go to [Meta for Developers](https://developers.facebook.com/) and create an app.
+2. Add the Instagram product you need (for example, Instagram Basic Display).
+3. Configure the OAuth callback URL to match your backend callback endpoint.
+4. Copy these values to your environment:
+   - `INSTAGRAM__CLIENT_ID` (Meta App ID / Client ID)
+   - `INSTAGRAM__CLIENT_SECRET` (Meta App Secret / Client Secret)
+   - `INSTAGRAM__REDIRECT_URI` (OAuth callback URL)
+   - `INSTAGRAM__GRAPH_API_VERSION` (optional, defaults to `v19.0`)
+
 | Variable | Description | Example Value |
 |---|---|---|
 | `LISTEN` | The address and port the server listens on | `0.0.0.0:3000` |
@@ -1133,21 +1144,10 @@ The application reads its configuration from environment variables. The separato
 | `DATABASE_URL` | Full PostgreSQL connection string (used by Diesel) | `postgres://postgres:example@localhost:5432/postgres` |
 | `PASSWORD_PEPPER` | Secret key used to pepper passwords before hashing | (A long random string) |
 | `JWT_SECRET` | Secret key used to sign JWT tokens | (A long random string) |
-| `INSTAGRAM__CLIENT_ID` | Meta app OAuth client ID for Instagram | (From Meta app dashboard) |
-| `INSTAGRAM__CLIENT_SECRET` | Meta app OAuth client secret for Instagram | (From Meta app dashboard) |
-| `INSTAGRAM__REDIRECT_URI` | OAuth callback URL registered in Meta app | `http://localhost:3000/oauth/instagram/callback` |
-| `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version used by client | `v19.0` |
-
-### Instagram OAuth Setup (Meta App)
-
-1. Open [Meta for Developers](https://developers.facebook.com/) and create an app.
-2. Add **Instagram Graph API** to the app.
-3. Set the OAuth callback URL to the same value as `INSTAGRAM__REDIRECT_URI`.
-4. Copy the app values into your `.env` file:
-   - `INSTAGRAM__CLIENT_ID` from App ID
-   - `INSTAGRAM__CLIENT_SECRET` from App Secret
-   - `INSTAGRAM__REDIRECT_URI` from your redirect URL
-   - `INSTAGRAM__GRAPH_API_VERSION` (use default `v19.0` unless needed)
+| `INSTAGRAM__CLIENT_ID` | Instagram OAuth client ID from Meta app | `1234567890` |
+| `INSTAGRAM__CLIENT_SECRET` | Instagram OAuth client secret from Meta app | (Meta app secret) |
+| `INSTAGRAM__REDIRECT_URI` | Instagram OAuth callback URL configured in Meta app | `http://localhost:3000/oauth/instagram/callback` |
+| `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version | `v19.0` |
 
 > **Security note:** `PASSWORD_PEPPER` and `JWT_SECRET` are extremely sensitive. If someone obtains the `JWT_SECRET`, they can create fake tokens and impersonate any user. If someone obtains the `PASSWORD_PEPPER`, they can attempt to crack password hashes from the database. Never commit these values to version control.
 

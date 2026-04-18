@@ -27,25 +27,20 @@ This project follows **Hexagonal Architecture** (Ports and Adapters) to ensure b
 
 ### Setup
 1. Start the database: `docker-compose up -d`
-2. Copy `.env.example` to `.env` and fill in values
-3. Run migrations: `diesel migration run`
-4. Start the server: `cargo run`
-
-### Instagram OAuth Configuration
-To configure Instagram OAuth, create a Meta app and copy the credentials into your `.env` file.
-
-1. Go to [Meta for Developers](https://developers.facebook.com/) and create an app.
-2. Add **Instagram Graph API** to the app.
-3. Configure OAuth redirect URL to match:
-   - `INSTAGRAM__REDIRECT_URI` (default: `http://localhost:3000/oauth/instagram/callback`)
-4. Copy values from the Meta app dashboard into:
-   - `INSTAGRAM__CLIENT_ID`
-   - `INSTAGRAM__CLIENT_SECRET`
-   - `INSTAGRAM__REDIRECT_URI`
-   - `INSTAGRAM__GRAPH_API_VERSION` (optional override, default `v19.0`)
+2. Run migrations: `diesel migration run`
+3. Start the server: `cargo run`
 
 ### Testing
 To run the integration tests:
 ```bash
 cargo test
 ```
+
+### Instagram OAuth Configuration
+1. Create a Meta app in the [Meta for Developers](https://developers.facebook.com/) dashboard.
+2. Add **Instagram Basic Display** (or your target Instagram product) to the app.
+3. Copy the app credentials into your `.env`:
+   - `INSTAGRAM__CLIENT_ID` ← Meta App ID / Client ID
+   - `INSTAGRAM__CLIENT_SECRET` ← Meta App Secret / Client Secret
+   - `INSTAGRAM__REDIRECT_URI` ← OAuth callback URL configured in Meta app settings (default: `http://localhost:3000/oauth/instagram/callback`)
+4. Optionally set `INSTAGRAM__GRAPH_API_VERSION` (defaults to `v19.0`).
