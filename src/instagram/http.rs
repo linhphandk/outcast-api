@@ -252,7 +252,7 @@ pub async fn refresh_instagram(
         Ok(Some(profile)) => profile.id,
         Ok(None) => {
             warn!(user_id = %auth_user.user_id, "Instagram refresh: profile not found");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to resolve profile").into_response();
+            return (StatusCode::NOT_FOUND, "Profile not found").into_response();
         }
         Err(err) => {
             error!(error = %err, user_id = %auth_user.user_id, "Failed to resolve profile for Instagram refresh");
@@ -273,7 +273,7 @@ pub async fn refresh_instagram(
             (StatusCode::TOO_MANY_REQUESTS, "Instagram rate limited").into_response()
         }
         Err(InstagramSyncError::NotConnected) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Instagram account not connected").into_response()
+            (StatusCode::NOT_FOUND, "Instagram account not connected").into_response()
         }
         Err(err) => {
             error!(error = %err, profile_id = %profile_id, "Instagram refresh failed");

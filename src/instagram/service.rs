@@ -30,6 +30,8 @@ pub enum InstagramSyncError {
     Instagram(#[from] IgError),
     #[error("Instagram account is not connected")]
     NotConnected,
+    #[error("Instagram service is missing profile repository dependency")]
+    ServiceMisconfigured,
 }
 
 impl InstagramService {
@@ -189,7 +191,7 @@ impl InstagramService {
         let profile_repository = self
             .profile_repository
             .as_ref()
-            .ok_or(InstagramSyncError::NotConnected)?;
+            .ok_or(InstagramSyncError::ServiceMisconfigured)?;
 
         profile_repository
             .upsert_social_handle_sync_by_platform(
