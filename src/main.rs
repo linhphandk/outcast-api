@@ -43,6 +43,9 @@ use uuid::Uuid;
             crate::user::http::user_controller::LoginUserReq,
             crate::user::http::user_controller::MeRes,
             crate::user::http::profile_controller::CreatorProfileRes,
+            crate::user::http::profile_controller::CreatorProfileWithDetailsRes,
+            crate::user::http::profile_controller::SocialHandleRes,
+            crate::user::http::profile_controller::RateRes,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
         )
     ),
