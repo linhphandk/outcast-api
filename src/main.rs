@@ -33,6 +33,7 @@ use uuid::Uuid;
         crate::user::http::user_controller::create_user,
         crate::user::http::user_controller::login_user,
         crate::user::http::user_controller::get_me,
+        crate::user::http::profile_controller::create_my_profile,
         crate::user::http::profile_controller::get_my_profile,
         crate::user::http::profile_controller::update_my_profile,
     ),
@@ -46,6 +47,9 @@ use uuid::Uuid;
             crate::user::http::profile_controller::CreatorProfileWithDetailsRes,
             crate::user::http::profile_controller::SocialHandleRes,
             crate::user::http::profile_controller::RateRes,
+            crate::user::http::profile_controller::CreateCreatorProfileReq,
+            crate::user::http::profile_controller::SocialHandleInputReq,
+            crate::user::http::profile_controller::RateInputReq,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
         )
     ),
