@@ -110,6 +110,7 @@ mod tests {
                     id: Uuid::nil(),
                     email,
                     password,
+                    avatar_url: None,
                 })
             });
 
@@ -172,6 +173,7 @@ mod tests {
                     id: Uuid::nil(),
                     email,
                     password: hashed.clone(),
+                    avatar_url: None,
                 }))
             });
 
@@ -216,6 +218,7 @@ mod tests {
                     id: Uuid::nil(),
                     email,
                     password: hashed.clone(),
+                    avatar_url: None,
                 }))
             });
 
@@ -262,6 +265,7 @@ mod tests {
                     id,
                     email: "me@example.com".to_string(),
                     password: "hashed".to_string(),
+                    avatar_url: None,
                 }))
             });
 

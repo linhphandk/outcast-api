@@ -249,6 +249,7 @@ mod tests {
             id,
             email: "user@example.com".to_owned(),
             password: "hashed".to_owned(),
+            avatar_url: None,
         }
     }
 

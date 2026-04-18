@@ -13,6 +13,7 @@ pub struct User {
     pub id: Uuid,
     pub email: String,
     pub password: String,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -85,6 +86,7 @@ impl UserRepositoryTrait for UserRepository {
                     id,
                     email,
                     password,
+                    avatar_url: None,
                 })
             })
             .await
