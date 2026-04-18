@@ -4,8 +4,7 @@ use bytes::Bytes;
 use crate::user::crypto::hash_password::{hash_password, verify_password};
 use crate::user::repository::user_repository::{RepositoryError, User, UserRepositoryTrait};
 use crate::user::storage::{StorageError, StoragePort};
-use bytes::Bytes;
-use std::sync::Arc;
+
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
