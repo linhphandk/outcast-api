@@ -57,6 +57,21 @@ struct IgBusinessAccount {
     id: String,
 }
 
+/// Profile statistics returned by the Instagram Graph API for a Business or
+/// Creator account (`GET /{ig-user-id}?fields=…`).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ProfileStats {
+    pub id: String,
+    pub username: Option<String>,
+    pub name: Option<String>,
+    pub biography: Option<String>,
+    pub followers_count: Option<i64>,
+    pub follows_count: Option<i64>,
+    pub media_count: Option<i64>,
+    pub profile_picture_url: Option<String>,
+    pub website: Option<String>,
+}
+
 impl IgClient {
     pub fn new(cfg: InstagramConfig) -> Self {
         let http = reqwest::Client::builder()
@@ -224,6 +239,50 @@ impl IgClient {
         let parsed: IgBusinessAccountResponse = serde_json::from_str(&body)?;
         Ok(parsed.instagram_business_account.map(|acct| acct.id))
     }
+
+    /// Fetch public-ish profile statistics for an Instagram Business /
+    /// Creator account.
+    ///
+    /// Calls `GET /{ig_user_id}?fields=username,name,biography,
+    /// followers_count,follows_count,media_count,profile_picture_url,website`
+    /// on the Facebook Graph API.
+    pub async fn fetch_profile_stats(
+        &self,
+        token: &str,
+        ig_user_id: &str,
+    ) -> Result<ProfileStats, IgError> {
+        let res = self
+            .http
+            .get(self.build_profile_stats_url(token, ig_user_id).to_string())
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    fn build_profile_stats_url(&self, token: &str, ig_user_id: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/{}",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, ig_user_id
+        ))
+        .expect("BUG: Failed to construct Facebook Graph profile stats URL");
+
+        url.query_pairs_mut()
+            .append_pair(
+                "fields",
+                "username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website",
+            )
+            .append_pair("access_token", token);
+        url
+    }
 }
 
 #[cfg(test)]
@@ -231,7 +290,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CodeExchange, IgBusinessAccountResponse, IgClient, PagesResponse,
+        CodeExchange, IgBusinessAccountResponse, IgClient, PagesResponse, ProfileStats,
         SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS,
         SCOPE_PAGES_SHOW_LIST,
     };
@@ -427,5 +486,71 @@ mod tests {
         let raw = r#"{ "id": "111" }"#;
         let parsed: IgBusinessAccountResponse = serde_json::from_str(raw).expect("should parse");
         assert!(parsed.instagram_business_account.is_none());
+    }
+
+    #[test]
+    fn build_profile_stats_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_profile_stats_url("my-token", "17841400000000001");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
+        assert_eq!(parsed.path(), "/v19.0/17841400000000001");
+        assert_eq!(
+            query.get("fields"),
+            Some(&"username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website".to_string())
+        );
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"my-token".to_string())
+        );
+    }
+
+    #[test]
+    fn profile_stats_parses_full_response() {
+        let raw = r#"{
+            "id": "17841400000000001",
+            "username": "creator_jane",
+            "name": "Jane Doe",
+            "biography": "Content creator & photographer",
+            "followers_count": 125000,
+            "follows_count": 340,
+            "media_count": 512,
+            "profile_picture_url": "https://example.com/pic.jpg",
+            "website": "https://janedoe.com"
+        }"#;
+
+        let parsed: ProfileStats = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.id, "17841400000000001");
+        assert_eq!(parsed.username.as_deref(), Some("creator_jane"));
+        assert_eq!(parsed.name.as_deref(), Some("Jane Doe"));
+        assert_eq!(
+            parsed.biography.as_deref(),
+            Some("Content creator & photographer")
+        );
+        assert_eq!(parsed.followers_count, Some(125000));
+        assert_eq!(parsed.follows_count, Some(340));
+        assert_eq!(parsed.media_count, Some(512));
+        assert_eq!(
+            parsed.profile_picture_url.as_deref(),
+            Some("https://example.com/pic.jpg")
+        );
+        assert_eq!(parsed.website.as_deref(), Some("https://janedoe.com"));
+    }
+
+    #[test]
+    fn profile_stats_parses_minimal_response() {
+        let raw = r#"{ "id": "17841400000000001" }"#;
+        let parsed: ProfileStats = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.id, "17841400000000001");
+        assert!(parsed.username.is_none());
+        assert!(parsed.name.is_none());
+        assert!(parsed.biography.is_none());
+        assert!(parsed.followers_count.is_none());
+        assert!(parsed.follows_count.is_none());
+        assert!(parsed.media_count.is_none());
+        assert!(parsed.profile_picture_url.is_none());
+        assert!(parsed.website.is_none());
     }
 }
