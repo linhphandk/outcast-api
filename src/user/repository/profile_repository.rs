@@ -84,6 +84,15 @@ pub struct NewRate {
     pub amount: BigDecimal,
 }
 
+#[derive(AsChangeset)]
+#[diesel(table_name = social_handles)]
+pub struct UpdateSocialHandle {
+    pub handle: String,
+    pub url: String,
+    pub follower_count: i32,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct SocialHandleInput {
     pub platform: String,
@@ -196,6 +205,21 @@ pub trait ProfileRepositoryTrait {
     async fn delete_rate(
         &self,
         rate_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError>;
+
+    async fn update_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<Option<SocialHandle>, ProfileRepositoryError>;
+
+    async fn delete_social_handle(
+        &self,
+        handle_id: Uuid,
         profile_id: Uuid,
     ) -> Result<bool, ProfileRepositoryError>;
 }
@@ -607,6 +631,81 @@ impl ProfileRepositoryTrait for ProfileRepository {
         })?
         .map_err(|e| {
             error!(error = %e, "Diesel error during rate deletion");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|rows_affected| rows_affected > 0)
+    }
+
+    #[instrument(skip(self, handle, url), fields(handle_id = %handle_id, profile_id = %profile_id))]
+    async fn update_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+        handle: String,
+        url: String,
+        follower_count: i32,
+    ) -> Result<Option<SocialHandle>, ProfileRepositoryError> {
+        debug!("Updating social handle");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let update = UpdateSocialHandle {
+            handle,
+            url,
+            follower_count,
+            updated_at: Some(Utc::now()),
+        };
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::id.eq(handle_id))
+                    .filter(social_handles::profile_id.eq(profile_id)),
+            )
+            .set(&update)
+            .get_result::<SocialHandle>(conn)
+            .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle update");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle update");
+            ProfileRepositoryError::DieselError(e)
+        })
+    }
+
+    #[instrument(skip(self), fields(handle_id = %handle_id, profile_id = %profile_id))]
+    async fn delete_social_handle(
+        &self,
+        handle_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<bool, ProfileRepositoryError> {
+        debug!("Deleting social handle");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        conn.interact(move |conn| {
+            diesel::delete(
+                social_handles::table
+                    .filter(social_handles::id.eq(handle_id))
+                    .filter(social_handles::profile_id.eq(profile_id)),
+            )
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle deletion");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle deletion");
             ProfileRepositoryError::DieselError(e)
         })
         .map(|rows_affected| rows_affected > 0)
@@ -1415,6 +1514,190 @@ mod tests {
         let profile = create_test_profile(&repo, user_id).await;
 
         let deleted = repo.delete_rate(Uuid::new_v4(), profile.id).await.unwrap();
+
+        assert!(!deleted);
+    }
+
+    // ── update_social_handle ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_update_social_handle_returns_updated() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let original = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        let updated = repo
+            .update_social_handle(
+                original.id,
+                profile.id,
+                "@alice_updated".to_string(),
+                "https://instagram.com/alice_updated".to_string(),
+                2_500,
+            )
+            .await
+            .unwrap();
+
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
+        assert_eq!(updated.id, original.id);
+        assert_eq!(updated.profile_id, profile.id);
+        assert_eq!(updated.platform, "instagram");
+        assert_eq!(updated.handle, "@alice_updated");
+        assert_eq!(updated.url, "https://instagram.com/alice_updated");
+        assert_eq!(updated.follower_count, 2_500);
+        assert!(updated.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_social_handle_wrong_profile_id_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let handle = repo
+            .add_social_handle(
+                profile_a.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not touch profile_a's handle.
+        let result = repo
+            .update_social_handle(
+                handle.id,
+                profile_b.id,
+                "@hacked".to_string(),
+                "https://evil.example.com".to_string(),
+                9_999,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+
+        // Confirm the original handle is unchanged.
+        let handles = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+        assert_eq!(handles[0].handle, "@alice");
+        assert_eq!(handles[0].follower_count, 1_000);
+    }
+
+    #[tokio::test]
+    async fn test_update_social_handle_nonexistent_returns_none() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let result = repo
+            .update_social_handle(
+                Uuid::new_v4(),
+                profile.id,
+                "@ghost".to_string(),
+                "https://example.com/ghost".to_string(),
+                0,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    // ── delete_social_handle ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_delete_social_handle_returns_true() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+        let handle = repo
+            .add_social_handle(
+                profile.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_social_handle(handle.id, profile.id)
+            .await
+            .unwrap();
+
+        assert!(deleted);
+        let handles = repo
+            .find_social_handles_by_profile_id(profile.id)
+            .await
+            .unwrap();
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_social_handle_wrong_profile_id_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_a = create_test_user(&pool).await;
+        let user_b = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile_a = create_test_profile(&repo, user_a).await;
+        let profile_b = create_test_profile(&repo, user_b).await;
+        let handle = repo
+            .add_social_handle(
+                profile_a.id,
+                "instagram".to_string(),
+                "@alice".to_string(),
+                "https://instagram.com/alice".to_string(),
+                1_000,
+            )
+            .await
+            .unwrap();
+
+        // Supply profile_b's id — must not delete profile_a's handle.
+        let deleted = repo
+            .delete_social_handle(handle.id, profile_b.id)
+            .await
+            .unwrap();
+
+        assert!(!deleted);
+        let handles = repo
+            .find_social_handles_by_profile_id(profile_a.id)
+            .await
+            .unwrap();
+        assert_eq!(handles.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_social_handle_nonexistent_returns_false() {
+        let (_container, pool) = setup_test_db().await;
+        let user_id = create_test_user(&pool).await;
+        let repo = ProfileRepository::new(pool);
+        let profile = create_test_profile(&repo, user_id).await;
+
+        let deleted = repo
+            .delete_social_handle(Uuid::new_v4(), profile.id)
+            .await
+            .unwrap();
 
         assert!(!deleted);
     }
