@@ -222,6 +222,12 @@ pub trait ProfileRepositoryTrait {
         handle_id: Uuid,
         profile_id: Uuid,
     ) -> Result<bool, ProfileRepositoryError>;
+
+    async fn reset_social_handle_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -709,6 +715,47 @@ impl ProfileRepositoryTrait for ProfileRepository {
             ProfileRepositoryError::DieselError(e)
         })
         .map(|rows_affected| rows_affected > 0)
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, platform = %platform))]
+    async fn reset_social_handle_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError> {
+        debug!("Resetting social handle metrics by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::profile_id.eq(profile_id))
+                    .filter(social_handles::platform.eq(platform)),
+            )
+            .set((
+                social_handles::follower_count.eq(0),
+                social_handles::engagement_rate.eq(BigDecimal::from(0)),
+                social_handles::last_synced_at.eq(None::<DateTime<Utc>>),
+                social_handles::updated_at.eq(Some(Utc::now())),
+            ))
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle reset");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle reset");
+            ProfileRepositoryError::DieselError(e)
+        })?;
+
+        Ok(())
     }
 }
 
