@@ -60,6 +60,12 @@ pub trait OAuthTokenRepositoryTrait: Send + Sync {
         provider_user_id: &str,
         scopes: &str,
     ) -> Result<OAuthToken, OAuthTokenRepositoryError>;
+
+    async fn delete(
+        &self,
+        profile_id: Uuid,
+        provider: &str,
+    ) -> Result<bool, OAuthTokenRepositoryError>;
 }
 
 impl OAuthTokenRepository {
@@ -136,6 +142,44 @@ impl OAuthTokenRepositoryTrait for OAuthTokenRepository {
 
         debug!(oauth_token_id = %token.id, "OAuth token upserted successfully");
         Ok(token)
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, provider = %provider))]
+    async fn delete(
+        &self,
+        profile_id: Uuid,
+        provider: &str,
+    ) -> Result<bool, OAuthTokenRepositoryError> {
+        info!("Deleting oauth token");
+
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            OAuthTokenRepositoryError::PoolError(e)
+        })?;
+
+        let provider = provider.to_string();
+
+        let rows_affected = conn
+            .interact(move |conn| {
+                diesel::delete(
+                    oauth_tokens::table
+                        .filter(oauth_tokens::profile_id.eq(profile_id))
+                        .filter(oauth_tokens::provider.eq(provider)),
+                )
+                .execute(conn)
+            })
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Interact error during oauth token deletion");
+                OAuthTokenRepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(error = %e, "Diesel error during oauth token deletion");
+                OAuthTokenRepositoryError::DieselError(e)
+            })?;
+
+        debug!(rows_affected, "OAuth token deletion completed");
+        Ok(rows_affected > 0)
     }
 }
 
