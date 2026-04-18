@@ -16,6 +16,7 @@ use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
 use instagram::client::IgClient;
 use instagram::repository::OAuthTokenRepository;
+use instagram::service::InstagramService;
 use serde::{Deserialize, Serialize};
 use user::storage::s3_adapter::S3Adapter;
 use user::storage::StoragePort;
@@ -41,6 +42,9 @@ use uuid::Uuid;
         crate::user::http::profile_controller::get_my_profile,
         crate::user::http::profile_controller::get_platforms,
         crate::user::http::profile_controller::update_my_profile,
+        crate::instagram::http::instagram_authorize,
+        crate::instagram::http::instagram_callback,
+        crate::instagram::http::disconnect_instagram,
     ),
     components(
         schemas(
@@ -56,11 +60,13 @@ use uuid::Uuid;
             crate::user::http::profile_controller::SocialHandleInputReq,
             crate::user::http::profile_controller::RateInputReq,
             crate::user::http::profile_controller::UpdateCreatorProfileReq,
+            crate::instagram::http::InstagramCallbackQuery,
         )
     ),
     tags(
         (name = "Users", description = "User management endpoints"),
-        (name = "Profiles", description = "Creator profile endpoints")
+        (name = "Profiles", description = "Creator profile endpoints"),
+        (name = "Instagram OAuth", description = "Instagram OAuth endpoints")
     ),
     info(
         title = "Outcast API",
@@ -85,6 +91,7 @@ pub struct AppState {
     pub profile_repository: ProfileRepository,
     pub instagram_oauth_repository: OAuthTokenRepository,
     pub instagram_client: IgClient,
+    pub instagram_service: InstagramService,
     pub jwt_secret: String,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
@@ -128,6 +135,12 @@ impl axum::extract::FromRef<AppState> for OAuthTokenRepository {
 impl axum::extract::FromRef<AppState> for IgClient {
     fn from_ref(state: &AppState) -> Self {
         state.instagram_client.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for InstagramService {
+    fn from_ref(state: &AppState) -> Self {
+        state.instagram_service.clone()
     }
 }
 
@@ -215,6 +228,8 @@ async fn main() {
     let profile_repository = ProfileRepository::new(diesel_pool.clone());
     let instagram_oauth_repository = OAuthTokenRepository::new(diesel_pool.clone());
     let instagram_client = IgClient::new(config.instagram.clone());
+    let instagram_service =
+        InstagramService::new(instagram_client.clone(), instagram_oauth_repository.clone());
     let session_repository: Arc<dyn SessionRepositoryTrait> =
         Arc::new(SessionRepository::new(diesel_pool.clone()));
     let session_user_repository: Arc<dyn UserRepositoryTrait> =
@@ -250,6 +265,7 @@ async fn main() {
         profile_repository,
         instagram_oauth_repository,
         instagram_client,
+        instagram_service,
         jwt_secret: config.jwt_secret,
         session_repository,
         session_service,
@@ -262,7 +278,7 @@ async fn main() {
         .merge(crate::user::http::user_controller::router())
         .merge(crate::user::http::profile_controller::router())
         .merge(crate::session::http::session_controller::router())
-        .merge(crate::instagram::http::router())
+        .nest("/oauth/instagram", crate::instagram::http::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(
             CorsLayer::new()

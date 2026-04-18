@@ -20,6 +20,9 @@ const AUTHORIZE_SCOPES: [&str; 4] = [
 pub struct IgClient {
     http: reqwest::Client,
     cfg: InstagramConfig,
+    facebook_oauth_base_url: String,
+    facebook_graph_base_url: String,
+    instagram_graph_base_url: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
@@ -105,18 +108,39 @@ pub struct ProfileStats {
 
 impl IgClient {
     pub fn new(cfg: InstagramConfig) -> Self {
+        Self::new_with_base_urls(
+            cfg,
+            format!("https://{}", FACEBOOK_OAUTH_HOST),
+            format!("https://{}", FACEBOOK_GRAPH_HOST),
+            format!("https://{}", INSTAGRAM_GRAPH_HOST),
+        )
+    }
+
+    pub fn new_with_base_urls(
+        cfg: InstagramConfig,
+        facebook_oauth_base_url: String,
+        facebook_graph_base_url: String,
+        instagram_graph_base_url: String,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to initialize Instagram HTTP client");
 
-        Self { http, cfg }
+        Self {
+            http,
+            cfg,
+            facebook_oauth_base_url,
+            facebook_graph_base_url,
+            instagram_graph_base_url,
+        }
     }
 
     pub fn build_authorize_url(&self, state: &str) -> String {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/dialog/oauth",
-            FACEBOOK_OAUTH_HOST, self.cfg.graph_api_version
+            "{}/{}/dialog/oauth",
+            self.facebook_oauth_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version
         ))
         .expect("BUG: Failed to construct Facebook OAuth URL - this should never happen with valid constants");
 
@@ -180,8 +204,9 @@ impl IgClient {
 
     fn build_exchange_url(&self, code: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/oauth/access_token",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
+            "{}/{}/oauth/access_token",
+            self.facebook_graph_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version
         ))
         .expect("BUG: Failed to construct Facebook Graph token exchange URL - this should never happen with valid configuration");
 
@@ -195,7 +220,10 @@ impl IgClient {
     }
 
     fn build_long_lived_exchange_url(&self, short: &str) -> url::Url {
-        let mut url = url::Url::parse(&format!("https://{}/access_token", INSTAGRAM_GRAPH_HOST))
+        let mut url = url::Url::parse(&format!(
+            "{}/access_token",
+            self.instagram_graph_base_url.trim_end_matches('/')
+        ))
             .expect("BUG: Failed to construct Instagram Graph long-lived token URL - this should never happen with valid constants");
 
         url.query_pairs_mut()
@@ -206,7 +234,10 @@ impl IgClient {
     }
 
     fn build_long_lived_refresh_url(&self, long_lived: &str) -> url::Url {
-        let mut url = url::Url::parse(&format!("https://{}/refresh_access_token", INSTAGRAM_GRAPH_HOST))
+        let mut url = url::Url::parse(&format!(
+            "{}/refresh_access_token",
+            self.instagram_graph_base_url.trim_end_matches('/')
+        ))
             .expect("BUG: Failed to construct Instagram Graph refresh token URL - this should never happen with valid constants");
 
         url.query_pairs_mut()
@@ -251,8 +282,9 @@ impl IgClient {
 
     fn build_pages_url(&self, token: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/me/accounts",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
+            "{}/{}/me/accounts",
+            self.facebook_graph_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version
         ))
         .expect("BUG: Failed to construct Facebook Graph pages URL");
 
@@ -263,8 +295,10 @@ impl IgClient {
 
     fn build_page_ig_url(&self, token: &str, page_id: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/{}",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, page_id
+            "{}/{}/{}",
+            self.facebook_graph_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version,
+            page_id
         ))
         .expect("BUG: Failed to construct Facebook Graph page IG URL");
 
@@ -328,8 +362,10 @@ impl IgClient {
 
     fn build_profile_stats_url(&self, token: &str, ig_user_id: &str) -> url::Url {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/{}",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, ig_user_id
+            "{}/{}/{}",
+            self.facebook_graph_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version,
+            ig_user_id
         ))
         .expect("BUG: Failed to construct Facebook Graph profile stats URL");
 
@@ -396,8 +432,10 @@ impl IgClient {
         limit: u32,
     ) -> url::Url {
         let mut url = url::Url::parse(&format!(
-            "https://{}/{}/{}/media",
-            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, ig_user_id
+            "{}/{}/{}/media",
+            self.facebook_graph_base_url.trim_end_matches('/'),
+            self.cfg.graph_api_version,
+            ig_user_id
         ))
         .expect("BUG: Failed to construct Facebook Graph recent media URL");
 

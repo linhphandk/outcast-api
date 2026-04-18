@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
-    routing::{delete, get},
+    routing::get,
 };
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
@@ -11,9 +11,8 @@ use serde::Deserialize;
 use tracing::{error, info, instrument, warn};
 
 use crate::instagram::{
-    client::IgClient,
-    repository::{OAuthTokenRepository, OAuthTokenRepositoryTrait},
-    state::{OAUTH_STATE_COOKIE_NAME, verify_state_cookie},
+    service::InstagramService,
+    state::{OAUTH_STATE_COOKIE_NAME, issue_state_cookie, verify_state_cookie},
 };
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::profile_repository::{ProfileRepository, ProfileRepositoryTrait};
@@ -22,20 +21,58 @@ const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
 const EMPTY_PROVIDER_USER_ID: &str = "";
 const EMPTY_SCOPES: &str = "";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct InstagramCallbackQuery {
     code: String,
     state: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/oauth/instagram",
+    responses(
+        (status = 303, description = "Redirect to Instagram authorization page"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Instagram OAuth"
+)]
+#[instrument(skip_all)]
+pub async fn instagram_authorize(
+    auth_user: AuthUser,
+    jar: CookieJar,
+    State(jwt_secret): State<String>,
+    State(instagram_service): State<InstagramService>,
+) -> impl IntoResponse {
+    let (state, state_cookie) = issue_state_cookie(auth_user.user_id, jwt_secret.as_bytes());
+    let authorize_url = instagram_service.build_authorize_url(&state);
+    let jar = jar.add(state_cookie);
+    (jar, Redirect::to(&authorize_url)).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/oauth/instagram/callback",
+    params(
+        ("code" = String, Query, description = "Authorization code returned by Instagram OAuth"),
+        ("state" = String, Query, description = "OAuth state returned by Instagram OAuth")
+    ),
+    responses(
+        (status = 303, description = "Redirect back to dashboard after successful OAuth callback"),
+        (status = 400, description = "Invalid or missing OAuth state"),
+        (status = 404, description = "Profile not found"),
+        (status = 500, description = "Failed to persist OAuth token"),
+        (status = 502, description = "Instagram token exchange failed")
+    ),
+    tag = "Instagram OAuth"
+)]
 #[instrument(skip_all)]
 pub async fn instagram_callback(
     jar: CookieJar,
     Query(query): Query<InstagramCallbackQuery>,
     State(jwt_secret): State<String>,
     State(profile_repo): State<ProfileRepository>,
-    State(client): State<IgClient>,
-    State(oauth_repo): State<OAuthTokenRepository>,
+    State(instagram_service): State<InstagramService>,
 ) -> impl IntoResponse {
     let state_cookie = match jar.get(OAUTH_STATE_COOKIE_NAME) {
         Some(cookie) => cookie.value(),
@@ -69,7 +106,7 @@ pub async fn instagram_callback(
         }
     };
 
-    let short = match client.exchange_code(&query.code).await {
+    let short = match instagram_service.exchange_code(&query.code).await {
         Ok(token) => token,
         Err(err) => {
             error!(error = %err, "Failed to exchange Instagram OAuth code");
@@ -77,7 +114,7 @@ pub async fn instagram_callback(
         }
     };
 
-    let long = match client.exchange_for_long_lived(&short.access_token).await {
+    let long = match instagram_service.exchange_for_long_lived(&short.access_token).await {
         Ok(token) => token,
         Err(err) => {
             error!(error = %err, "Failed to exchange for Instagram long-lived token");
@@ -95,8 +132,8 @@ pub async fn instagram_callback(
             .map(|seconds| Utc::now() + Duration::seconds(seconds))
     });
 
-    if let Err(err) = oauth_repo
-        .upsert(
+    if let Err(err) = instagram_service
+        .upsert_oauth_token(
             profile_id,
             "instagram",
             &long.access_token,
@@ -119,11 +156,22 @@ pub async fn instagram_callback(
     Redirect::to(DASHBOARD_REDIRECT_PATH).into_response()
 }
 
+#[utoipa::path(
+    delete,
+    path = "/oauth/instagram",
+    responses(
+        (status = 204, description = "Instagram disconnected"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("bearer_token" = [])),
+    tag = "Instagram OAuth"
+)]
 #[instrument(skip_all)]
 pub async fn disconnect_instagram(
     auth_user: AuthUser,
     State(profile_repo): State<ProfileRepository>,
-    State(oauth_repo): State<OAuthTokenRepository>,
+    State(instagram_service): State<InstagramService>,
 ) -> impl IntoResponse {
     let profile_id = match profile_repo.find_by_user_id(auth_user.user_id).await {
         Ok(Some(profile)) => profile.id,
@@ -137,7 +185,7 @@ pub async fn disconnect_instagram(
         }
     };
 
-    if let Err(err) = oauth_repo.delete(profile_id, "instagram").await {
+    if let Err(err) = instagram_service.delete_oauth_token(profile_id, "instagram").await {
         error!(error = %err, profile_id = %profile_id, "Failed to delete Instagram OAuth token");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
@@ -158,21 +206,24 @@ pub fn router<S>() -> Router<S>
 where
     String: axum::extract::FromRef<S>,
     ProfileRepository: axum::extract::FromRef<S>,
-    OAuthTokenRepository: axum::extract::FromRef<S>,
-    IgClient: axum::extract::FromRef<S>,
+    InstagramService: axum::extract::FromRef<S>,
     std::sync::Arc<dyn crate::session::repository::session_repository::SessionRepositoryTrait>:
         axum::extract::FromRef<S>,
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/oauth/instagram/callback", get(instagram_callback))
-        .route("/oauth/instagram", delete(disconnect_instagram))
+        .route("/", get(instagram_authorize).delete(disconnect_instagram))
+        .route("/callback", get(instagram_callback))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::InstagramConfig;
+    use crate::instagram::client::IgClient;
+    use crate::instagram::repository::OAuthTokenRepository;
+    use crate::instagram::repository::OAuthTokenRepositoryTrait;
+    use crate::instagram::service::InstagramService;
     use crate::instagram::state::issue_state_cookie;
     use axum::http::Request;
     use tower::ServiceExt;
@@ -181,8 +232,7 @@ mod tests {
     struct TestState {
         jwt_secret: String,
         profile_repository: ProfileRepository,
-        oauth_repository: OAuthTokenRepository,
-        instagram_client: IgClient,
+        instagram_service: InstagramService,
     }
 
     impl axum::extract::FromRef<TestState> for String {
@@ -197,15 +247,9 @@ mod tests {
         }
     }
 
-    impl axum::extract::FromRef<TestState> for OAuthTokenRepository {
+    impl axum::extract::FromRef<TestState> for InstagramService {
         fn from_ref(state: &TestState) -> Self {
-            state.oauth_repository.clone()
-        }
-    }
-
-    impl axum::extract::FromRef<TestState> for IgClient {
-        fn from_ref(state: &TestState) -> Self {
-            state.instagram_client.clone()
+            state.instagram_service.clone()
         }
     }
 
@@ -229,21 +273,23 @@ mod tests {
         TestState {
             jwt_secret: "test-jwt-secret".to_string(),
             profile_repository: ProfileRepository::new(pool.clone()),
-            oauth_repository: OAuthTokenRepository::new(pool),
-            instagram_client: IgClient::new(ig_cfg),
+            instagram_service: InstagramService::new(
+                IgClient::new(ig_cfg),
+                OAuthTokenRepository::new(pool),
+            ),
         }
     }
 
     fn app() -> Router {
         Router::new()
-            .route("/oauth/instagram/callback", get(instagram_callback))
+            .route("/callback", get(instagram_callback))
             .with_state(test_state())
     }
 
     #[tokio::test]
     async fn callback_missing_state_cookie_returns_bad_request() {
         let request = Request::builder()
-            .uri("/oauth/instagram/callback?code=abc&state=state-1")
+            .uri("/callback?code=abc&state=state-1")
             .body(axum::body::Body::empty())
             .expect("request should build");
 
@@ -259,7 +305,7 @@ mod tests {
         );
 
         let request = Request::builder()
-            .uri("/oauth/instagram/callback?code=abc&state=different-state")
+            .uri("/callback?code=abc&state=different-state")
             .header("Cookie", format!("{}={}", cookie.name(), cookie.value()))
             .body(axum::body::Body::empty())
             .expect("request should build");
@@ -281,7 +327,7 @@ mod tests {
         use crate::user::repository::user_repository::{UserRepository, UserRepositoryTrait};
         use crate::user::usecase::user_service::UserService;
         use axum::body::Body;
-        use axum::routing::post;
+        use axum::routing::{delete, post};
         use bigdecimal::BigDecimal;
         use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
         use http_body_util::BodyExt;
@@ -295,8 +341,7 @@ mod tests {
         struct IntegrationTestState {
             user_service: UserService<UserRepository>,
             profile_repository: ProfileRepository,
-            oauth_repository: OAuthTokenRepository,
-            instagram_client: IgClient,
+            instagram_service: InstagramService,
             session_service: SessionService,
             session_repo: Arc<dyn SessionRepositoryTrait>,
             jwt_secret: String,
@@ -314,15 +359,9 @@ mod tests {
             }
         }
 
-        impl axum::extract::FromRef<IntegrationTestState> for OAuthTokenRepository {
+        impl axum::extract::FromRef<IntegrationTestState> for InstagramService {
             fn from_ref(state: &IntegrationTestState) -> Self {
-                state.oauth_repository.clone()
-            }
-        }
-
-        impl axum::extract::FromRef<IntegrationTestState> for IgClient {
-            fn from_ref(state: &IntegrationTestState) -> Self {
-                state.instagram_client.clone()
+                state.instagram_service.clone()
             }
         }
 
@@ -393,8 +432,7 @@ mod tests {
             let state = IntegrationTestState {
                 user_service: UserService::new(user_repository, TEST_PEPPER.to_string()),
                 profile_repository,
-                oauth_repository,
-                instagram_client: IgClient::new(ig_cfg),
+                instagram_service: InstagramService::new(IgClient::new(ig_cfg), oauth_repository),
                 session_service,
                 session_repo,
                 jwt_secret: TEST_JWT_SECRET.to_string(),
