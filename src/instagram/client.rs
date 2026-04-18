@@ -1,7 +1,9 @@
 use std::time::Duration;
 use crate::config::InstagramConfig;
+use crate::instagram::error::IgError;
 
 const FACEBOOK_OAUTH_HOST: &str = "www.facebook.com";
+const FACEBOOK_GRAPH_HOST: &str = "graph.facebook.com";
 pub const SCOPE_INSTAGRAM_BASIC: &str = "instagram_basic";
 pub const SCOPE_INSTAGRAM_MANAGE_INSIGHTS: &str = "instagram_manage_insights";
 pub const SCOPE_PAGES_SHOW_LIST: &str = "pages_show_list";
@@ -16,6 +18,13 @@ const AUTHORIZE_SCOPES: [&str; 4] = [
 pub struct IgClient {
     http: reqwest::Client,
     cfg: InstagramConfig,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+pub struct CodeExchange {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: Option<u64>,
 }
 
 impl IgClient {
@@ -45,6 +54,31 @@ impl IgClient {
 
         url.to_string()
     }
+
+    pub async fn exchange_code(&self, code: &str) -> Result<CodeExchange, IgError> {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/oauth/access_token",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
+        ))
+        .expect("BUG: Failed to construct Facebook Graph token exchange URL - this should never happen with valid constants");
+
+        url.query_pairs_mut()
+            .append_pair("client_id", &self.cfg.client_id)
+            .append_pair("client_secret", &self.cfg.client_secret)
+            .append_pair("redirect_uri", &self.cfg.redirect_uri)
+            .append_pair("code", code);
+
+        let res = self.http.get(url).send().await?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        Ok(serde_json::from_str(&body)?)
+    }
 }
 
 #[cfg(test)]
@@ -52,8 +86,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        IgClient, SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS,
-        SCOPE_PAGES_SHOW_LIST,
+        CodeExchange, IgClient, SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC,
+        SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -104,5 +138,19 @@ mod tests {
         let url = client.build_authorize_url(state);
 
         assert!(url.contains("state=state%2Fwith%3Funsafe%26chars%3D1"));
+    }
+
+    #[test]
+    fn code_exchange_response_parses_expires_in() {
+        let raw = r#"{
+            "access_token": "abc123",
+            "token_type": "bearer",
+            "expires_in": 5183944
+        }"#;
+
+        let parsed: CodeExchange = serde_json::from_str(raw).expect("response should parse");
+        assert_eq!(parsed.access_token, "abc123");
+        assert_eq!(parsed.token_type, "bearer");
+        assert_eq!(parsed.expires_in, Some(5183944));
     }
 }
