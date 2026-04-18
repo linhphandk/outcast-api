@@ -86,6 +86,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
+    pub s3_client: aws_sdk_s3::Client,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -137,6 +138,12 @@ impl axum::extract::FromRef<AppState> for Arc<dyn SessionRepositoryTrait> {
 impl axum::extract::FromRef<AppState> for SessionService {
     fn from_ref(state: &AppState) -> Self {
         state.session_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for aws_sdk_s3::Client {
+    fn from_ref(state: &AppState) -> Self {
+        state.s3_client.clone()
     }
 }
 
@@ -218,6 +225,20 @@ async fn main() {
     let profile_service =
         crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
 
+    // Build S3 client
+    let mut s3_config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(aws_config::Region::new(config.s3.region.clone()));
+    let has_custom_endpoint = config.s3.endpoint_url.is_some();
+    if let Some(ref endpoint) = config.s3.endpoint_url {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint);
+    }
+    let aws_cfg = s3_config_builder.load().await;
+    let mut s3_builder = aws_sdk_s3::config::Builder::from(&aws_cfg);
+    if has_custom_endpoint {
+        s3_builder = s3_builder.force_path_style(true);
+    }
+    let s3_client = aws_sdk_s3::Client::from_conf(s3_builder.build());
+
     let state = AppState {
         pool,
         user_service,
@@ -228,6 +249,7 @@ async fn main() {
         jwt_secret: config.jwt_secret,
         session_repository,
         session_service,
+        s3_client,
     };
 
     let app = Router::new()
