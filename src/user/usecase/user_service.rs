@@ -137,9 +137,9 @@ impl<R: UserRepositoryTrait> UserService<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user::storage::{MockStoragePort, StorageError};
     use bytes::Bytes;
     use crate::user::repository::user_repository::MockUserRepositoryTrait;
+    use crate::user::storage::{MockStoragePort, StorageError};
     use mockall::predicate::*;
     use uuid::Uuid;
 
