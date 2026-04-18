@@ -24,6 +24,12 @@ pub struct NewUser {
     pub password: String,
 }
 
+#[derive(AsChangeset)]
+#[diesel(table_name = users)]
+pub struct UpdateUser {
+    pub avatar_url: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryError {
     #[error("Database pool error: {0}")]
@@ -45,6 +51,7 @@ pub trait UserRepositoryTrait: Send + Sync {
     async fn create(&self, email: String, password: String) -> Result<User, RepositoryError>;
     async fn find_by_email(&self, email: String) -> Result<Option<User>, RepositoryError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, RepositoryError>;
+    async fn update_avatar_url(&self, user_id: Uuid, url: &str) -> Result<User, RepositoryError>;
 }
 
 impl UserRepository {
@@ -173,6 +180,35 @@ impl UserRepositoryTrait for UserRepository {
             })?;
 
         debug!(found = user.is_some(), "find_by_id result");
+        Ok(user)
+    }
+
+    #[instrument(skip(self, url), fields(user_id = %user_id))]
+    async fn update_avatar_url(&self, user_id: Uuid, url: &str) -> Result<User, RepositoryError> {
+        info!("Updating user avatar URL");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            RepositoryError::PoolError(e)
+        })?;
+
+        let avatar_url = Some(url.to_string());
+        let user = conn
+            .interact(move |conn| {
+                diesel::update(users::table.filter(users::id.eq(user_id)))
+                    .set(&UpdateUser { avatar_url })
+                    .get_result::<User>(conn)
+            })
+            .await
+            .map_err(|e| {
+                error!(user_id = %user_id, error = %e, "Interact error during update_avatar_url");
+                RepositoryError::InteractError(e)
+            })?
+            .map_err(|e| {
+                error!(user_id = %user_id, error = %e, "Diesel error during update_avatar_url");
+                RepositoryError::DieselError(e)
+            })?;
+
+        info!(user_id = %user.id, "Updated user avatar URL successfully");
         Ok(user)
     }
 }
@@ -312,5 +348,37 @@ mod tests {
         let found_user = repo.find_by_id(Uuid::new_v4()).await.unwrap();
 
         assert!(found_user.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_avatar_url_updates_target_user_only() {
+        let (_container, pool) = setup_test_db().await;
+        let repo = UserRepository::new(pool);
+
+        let target_user = repo
+            .create("target@example.com".to_string(), "password123".to_string())
+            .await
+            .unwrap();
+        let untouched_user = repo
+            .create("untouched@example.com".to_string(), "password123".to_string())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .update_avatar_url(target_user.id, "s3://avatars/target.png")
+            .await
+            .unwrap();
+
+        assert_eq!(updated.id, target_user.id);
+        assert_eq!(updated.avatar_url.as_deref(), Some("s3://avatars/target.png"));
+
+        let reloaded_target = repo.find_by_id(target_user.id).await.unwrap().unwrap();
+        assert_eq!(
+            reloaded_target.avatar_url.as_deref(),
+            Some("s3://avatars/target.png")
+        );
+
+        let reloaded_untouched = repo.find_by_id(untouched_user.id).await.unwrap().unwrap();
+        assert_eq!(reloaded_untouched.avatar_url, None);
     }
 }
