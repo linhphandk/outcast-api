@@ -362,6 +362,46 @@ impl IgClient {
         })
     }
 
+    /// Refresh a long-lived Instagram Graph access token before it expires.
+    ///
+    /// Calls `GET /refresh_access_token?grant_type=ig_refresh_token&access_token={token}`
+    /// on the Instagram Graph API. Long-lived tokens expire after ~60 days and must
+    /// be refreshed while they are still valid.
+    ///
+    /// Returns a new [`CodeExchange`] containing the refreshed token and its new
+    /// `expires_in` (≈ 5 184 000 seconds / 60 days).
+    ///
+    /// On a `401` response the caller should treat the stored token as invalid and
+    /// clear it from the database.
+    pub async fn refresh_long_lived_token(&self, long_lived: &str) -> Result<CodeExchange, IgError> {
+        let res = self
+            .http
+            .get(self.build_refresh_url(long_lived))
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    fn build_refresh_url(&self, long_lived: &str) -> url::Url {
+        let mut url =
+            url::Url::parse(&format!("https://{}/refresh_access_token", INSTAGRAM_GRAPH_HOST))
+                .expect("BUG: Failed to construct Instagram Graph refresh token URL - this should never happen with valid constants");
+
+        url.query_pairs_mut()
+            .append_pair("grant_type", "ig_refresh_token")
+            .append_pair("access_token", long_lived);
+        url
+    }
+
     fn build_recent_media_url(
         &self,
         token: &str,
@@ -391,8 +431,9 @@ mod tests {
 
     use super::{
         CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse,
-        PagesResponse, ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT,
-        SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
+        PagesResponse, ProfileStats, RecentMediaSummary, INSTAGRAM_GRAPH_HOST,
+        SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS,
+        SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -769,6 +810,39 @@ mod tests {
         };
 
         assert!((summary.engagement_rate - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn build_refresh_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_refresh_url("long-lived-token/unsafe?x=1");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some(INSTAGRAM_GRAPH_HOST));
+        assert_eq!(parsed.path(), "/refresh_access_token");
+        assert_eq!(
+            query.get("grant_type"),
+            Some(&"ig_refresh_token".to_string())
+        );
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"long-lived-token/unsafe?x=1".to_string())
+        );
+    }
+
+    #[test]
+    fn refresh_response_parses_with_expires_in() {
+        let raw = r#"{
+            "access_token": "refreshed-token-abc",
+            "token_type": "bearer",
+            "expires_in": 5183944
+        }"#;
+
+        let parsed: CodeExchange = serde_json::from_str(raw).expect("response should parse");
+        assert_eq!(parsed.access_token, "refreshed-token-abc");
+        assert_eq!(parsed.token_type, "bearer");
+        assert_eq!(parsed.expires_in, Some(5183944));
     }
 
     #[test]
