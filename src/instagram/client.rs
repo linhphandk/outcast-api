@@ -29,6 +29,34 @@ pub struct CodeExchange {
     pub expires_in: Option<u64>,
 }
 
+/// Envelope returned by `GET /me/accounts`.
+#[derive(Debug, serde::Deserialize)]
+struct PagesResponse {
+    data: Vec<PageData>,
+    paging: Option<Paging>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PageData {
+    id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Paging {
+    next: Option<String>,
+}
+
+/// Envelope returned by `GET /{page_id}?fields=instagram_business_account`.
+#[derive(Debug, serde::Deserialize)]
+struct IgBusinessAccountResponse {
+    instagram_business_account: Option<IgBusinessAccount>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct IgBusinessAccount {
+    id: String,
+}
+
 impl IgClient {
     pub fn new(cfg: InstagramConfig) -> Self {
         let http = reqwest::Client::builder()
@@ -113,6 +141,89 @@ impl IgClient {
             .append_pair("access_token", short);
         url
     }
+
+    /// Fetch the Instagram Business Account ID connected to one of the user's
+    /// Facebook Pages.
+    ///
+    /// Walks `GET /me/accounts` (following pagination) and, for every page
+    /// returned, queries `GET /{page_id}?fields=instagram_business_account`.
+    /// Returns the first connected IG Business Account ID found, or
+    /// `IgError::NoBusinessAccount` when none of the pages have one.
+    pub async fn fetch_business_account(&self, token: &str) -> Result<String, IgError> {
+        let mut next_url: Option<String> = Some(self.build_pages_url(token).to_string());
+
+        while let Some(url) = next_url.take() {
+            let res = self.http.get(&url).send().await?;
+            if !res.status().is_success() {
+                let status = res.status();
+                let headers = res.headers().clone();
+                let body = res.text().await?;
+                return Err(IgError::from_response_parts(status, &headers, body));
+            }
+
+            let body = res.text().await?;
+            let pages: PagesResponse = serde_json::from_str(&body)?;
+
+            for page in &pages.data {
+                if let Some(ig_id) = self.fetch_page_ig_account(token, &page.id).await? {
+                    return Ok(ig_id);
+                }
+            }
+
+            next_url = pages.paging.and_then(|p| p.next);
+        }
+
+        Err(IgError::NoBusinessAccount)
+    }
+
+    fn build_pages_url(&self, token: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/me/accounts",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version
+        ))
+        .expect("BUG: Failed to construct Facebook Graph pages URL");
+
+        url.query_pairs_mut()
+            .append_pair("access_token", token);
+        url
+    }
+
+    fn build_page_ig_url(&self, token: &str, page_id: &str) -> url::Url {
+        let mut url = url::Url::parse(&format!(
+            "https://{}/{}/{}",
+            FACEBOOK_GRAPH_HOST, self.cfg.graph_api_version, page_id
+        ))
+        .expect("BUG: Failed to construct Facebook Graph page IG URL");
+
+        url.query_pairs_mut()
+            .append_pair("fields", "instagram_business_account")
+            .append_pair("access_token", token);
+        url
+    }
+
+    /// Query a single Facebook Page for its connected IG Business Account.
+    async fn fetch_page_ig_account(
+        &self,
+        token: &str,
+        page_id: &str,
+    ) -> Result<Option<String>, IgError> {
+        let res = self
+            .http
+            .get(self.build_page_ig_url(token, page_id).to_string())
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = res.text().await?;
+            return Err(IgError::from_response_parts(status, &headers, body));
+        }
+
+        let body = res.text().await?;
+        let parsed: IgBusinessAccountResponse = serde_json::from_str(&body)?;
+        Ok(parsed.instagram_business_account.map(|acct| acct.id))
+    }
 }
 
 #[cfg(test)]
@@ -120,8 +231,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CodeExchange, IgClient, SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC,
-        SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
+        CodeExchange, IgBusinessAccountResponse, IgClient, PagesResponse,
+        SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS,
+        SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -230,5 +342,90 @@ mod tests {
             query.get("access_token"),
             Some(&"short-lived-token/unsafe?x=1".to_string())
         );
+    }
+
+    #[test]
+    fn build_pages_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_pages_url("my-token/unsafe?x=1");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
+        assert_eq!(parsed.path(), "/v19.0/me/accounts");
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"my-token/unsafe?x=1".to_string())
+        );
+    }
+
+    #[test]
+    fn build_page_ig_url_has_expected_host_path_and_query_params() {
+        let client = IgClient::new(test_config());
+        let url = client.build_page_ig_url("my-token", "123456789");
+        let parsed = url::Url::parse(url.as_ref()).expect("URL should parse");
+        let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+
+        assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
+        assert_eq!(parsed.path(), "/v19.0/123456789");
+        assert_eq!(
+            query.get("fields"),
+            Some(&"instagram_business_account".to_string())
+        );
+        assert_eq!(
+            query.get("access_token"),
+            Some(&"my-token".to_string())
+        );
+    }
+
+    #[test]
+    fn pages_response_parses_with_data_and_next() {
+        let raw = r#"{
+            "data": [
+                { "id": "111" },
+                { "id": "222" }
+            ],
+            "paging": {
+                "next": "https://graph.facebook.com/v19.0/me/accounts?after=abc"
+            }
+        }"#;
+
+        let parsed: PagesResponse = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.data.len(), 2);
+        assert_eq!(parsed.data[0].id, "111");
+        assert_eq!(parsed.data[1].id, "222");
+        assert_eq!(
+            parsed.paging.unwrap().next.unwrap(),
+            "https://graph.facebook.com/v19.0/me/accounts?after=abc"
+        );
+    }
+
+    #[test]
+    fn pages_response_parses_without_paging() {
+        let raw = r#"{ "data": [{ "id": "333" }] }"#;
+        let parsed: PagesResponse = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.data.len(), 1);
+        assert!(parsed.paging.is_none());
+    }
+
+    #[test]
+    fn ig_business_account_response_parses_with_account() {
+        let raw = r#"{
+            "instagram_business_account": { "id": "17841400000000001" },
+            "id": "111"
+        }"#;
+
+        let parsed: IgBusinessAccountResponse = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(
+            parsed.instagram_business_account.unwrap().id,
+            "17841400000000001"
+        );
+    }
+
+    #[test]
+    fn ig_business_account_response_parses_without_account() {
+        let raw = r#"{ "id": "111" }"#;
+        let parsed: IgBusinessAccountResponse = serde_json::from_str(raw).expect("should parse");
+        assert!(parsed.instagram_business_account.is_none());
     }
 }

@@ -21,6 +21,8 @@ pub enum IgError {
         message: String,
         subcode: Option<i64>,
     },
+    #[error("no Instagram Business Account connected to any Facebook Page")]
+    NoBusinessAccount,
 }
 
 #[derive(Debug, Deserialize)]
