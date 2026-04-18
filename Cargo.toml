@@ -35,6 +35,9 @@ utoipa-scalar = { version = "0.3", features = ["axum"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+aws-sdk-s3 = "1.129.0"
+aws-config = "1.8.15"
+aws-credential-types = "1.2.14"
 
 [dev-dependencies]
 diesel_migrations = { version = "2.3.1", features = ["postgres"] }

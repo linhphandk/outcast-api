@@ -7,6 +7,22 @@ fn default_instagram_graph_api_version() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct S3Config {
+    pub bucket: String,
+    pub region: String,
+    pub endpoint_url: Option<String>,
+}
+
+impl S3Config {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        ::config::Config::builder()
+            .add_source(::config::Environment::with_prefix("S3").prefix_separator("__"))
+            .build()?
+            .try_deserialize()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct InstagramConfig {
     pub client_id: String,
     pub client_secret: String,
@@ -34,6 +50,7 @@ pub struct AppConfig {
     pub password_pepper: String,
     pub jwt_secret: String,
     pub instagram: InstagramConfig,
+    pub s3: S3Config,
 }
 
 impl AppConfig {
@@ -53,6 +70,7 @@ impl AppConfig {
             .try_deserialize()?;
 
         let instagram = InstagramConfig::from_env()?;
+        let s3 = S3Config::from_env()?;
 
         Ok(Self {
             listen: base_config.listen,
@@ -61,6 +79,7 @@ impl AppConfig {
             password_pepper: base_config.password_pepper,
             jwt_secret: base_config.jwt_secret,
             instagram,
+            s3,
         })
     }
 }
