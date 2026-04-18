@@ -16,6 +16,7 @@ const AUTHORIZE_SCOPES: [&str; 4] = [
     SCOPE_BUSINESS_MANAGEMENT,
 ];
 
+#[derive(Clone)]
 pub struct IgClient {
     http: reqwest::Client,
     cfg: InstagramConfig,

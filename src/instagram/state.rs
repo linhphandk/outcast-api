@@ -4,7 +4,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const OAUTH_STATE_COOKIE_NAME: &str = "instagram_oauth_state";
+pub const OAUTH_STATE_COOKIE_NAME: &str = "ig_oauth_state";
 const OAUTH_STATE_TTL_SECS: i64 = 10 * 60;
 
 #[derive(Debug, Serialize, Deserialize)]

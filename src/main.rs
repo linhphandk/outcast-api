@@ -14,6 +14,8 @@ use axum::{
 use axum_macros::debug_handler;
 use deadpool_postgres::{Client, Pool, PoolError, Runtime};
 use dotenvy::dotenv;
+use instagram::client::IgClient;
+use instagram::repository::OAuthTokenRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use user::repository::profile_repository::ProfileRepository;
@@ -77,6 +79,9 @@ pub struct AppState {
     pub pool: deadpool_postgres::Pool,
     pub user_service: crate::user::usecase::user_service::UserService<UserRepository>,
     pub profile_service: crate::user::usecase::profile_service::ProfileService<ProfileRepository>,
+    pub profile_repository: ProfileRepository,
+    pub instagram_oauth_repository: OAuthTokenRepository,
+    pub instagram_client: IgClient,
     pub jwt_secret: String,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
@@ -101,6 +106,24 @@ impl axum::extract::FromRef<AppState>
 {
     fn from_ref(state: &AppState) -> Self {
         state.profile_service.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for ProfileRepository {
+    fn from_ref(state: &AppState) -> Self {
+        state.profile_repository.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for OAuthTokenRepository {
+    fn from_ref(state: &AppState) -> Self {
+        state.instagram_oauth_repository.clone()
+    }
+}
+
+impl axum::extract::FromRef<AppState> for IgClient {
+    fn from_ref(state: &AppState) -> Self {
+        state.instagram_client.clone()
     }
 }
 
@@ -180,6 +203,8 @@ async fn main() {
 
     let user_repository = UserRepository::new(diesel_pool.clone());
     let profile_repository = ProfileRepository::new(diesel_pool.clone());
+    let instagram_oauth_repository = OAuthTokenRepository::new(diesel_pool.clone());
+    let instagram_client = IgClient::new(config.instagram.clone());
     let session_repository: Arc<dyn SessionRepositoryTrait> =
         Arc::new(SessionRepository::new(diesel_pool.clone()));
     let session_user_repository: Arc<dyn UserRepositoryTrait> =
@@ -189,12 +214,16 @@ async fn main() {
         user_repository,
         config.password_pepper,
     );
-    let profile_service = crate::user::usecase::profile_service::ProfileService::new(profile_repository);
+    let profile_service =
+        crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
 
     let state = AppState {
         pool,
         user_service,
         profile_service,
+        profile_repository,
+        instagram_oauth_repository,
+        instagram_client,
         jwt_secret: config.jwt_secret,
         session_repository,
         session_service,
@@ -206,6 +235,7 @@ async fn main() {
         .merge(crate::user::http::user_controller::router())
         .merge(crate::user::http::profile_controller::router())
         .merge(crate::session::http::session_controller::router())
+        .merge(crate::instagram::http::router())
         .merge(Scalar::with_url("/scalar", ApiDoc::openapi()))
         .layer(
             CorsLayer::new()
