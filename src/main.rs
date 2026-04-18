@@ -207,7 +207,8 @@ async fn main() {
         user_repository,
         config.password_pepper,
     );
-    let profile_service = crate::user::usecase::profile_service::ProfileService::new(profile_repository);
+    let profile_service =
+        crate::user::usecase::profile_service::ProfileService::new(profile_repository.clone());
 
     let state = AppState {
         pool,
