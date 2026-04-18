@@ -2786,6 +2786,7 @@ dependencies = [
  "axum-macros",
  "bcrypt",
  "bigdecimal",
+ "bytes",
  "chrono",
  "config",
  "cookie",
