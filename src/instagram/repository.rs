@@ -4,8 +4,6 @@ use chrono::{DateTime, Utc};
 use deadpool_diesel::InteractError;
 use deadpool_diesel::postgres::Pool;
 use diesel::prelude::*;
-#[cfg(test)]
-use mockall::automock;
 use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
@@ -50,7 +48,6 @@ pub struct OAuthTokenRepository {
     pool: Pool,
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait OAuthTokenRepositoryTrait: Send + Sync {
     async fn upsert(
