@@ -17,6 +17,8 @@ use dotenvy::dotenv;
 use instagram::client::IgClient;
 use instagram::repository::OAuthTokenRepository;
 use serde::{Deserialize, Serialize};
+use user::storage::s3_adapter::S3Adapter;
+use user::storage::StoragePort;
 use std::sync::Arc;
 use user::repository::profile_repository::ProfileRepository;
 use user::repository::user_repository::{UserRepository, UserRepositoryTrait};
@@ -86,7 +88,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub session_repository: Arc<dyn SessionRepositoryTrait>,
     pub session_service: SessionService,
-    pub s3_client: aws_sdk_s3::Client,
+    pub storage: Arc<dyn StoragePort>,
 }
 
 impl axum::extract::FromRef<AppState> for deadpool_postgres::Pool {
@@ -141,9 +143,9 @@ impl axum::extract::FromRef<AppState> for SessionService {
     }
 }
 
-impl axum::extract::FromRef<AppState> for aws_sdk_s3::Client {
+impl axum::extract::FromRef<AppState> for Arc<dyn StoragePort> {
     fn from_ref(state: &AppState) -> Self {
-        state.s3_client.clone()
+        state.storage.clone()
     }
 }
 
@@ -238,6 +240,8 @@ async fn main() {
         s3_builder = s3_builder.force_path_style(true);
     }
     let s3_client = aws_sdk_s3::Client::from_conf(s3_builder.build());
+    let storage: Arc<dyn StoragePort> =
+        Arc::new(S3Adapter::new(s3_client, config.s3.bucket.clone()));
 
     let state = AppState {
         pool,
@@ -249,7 +253,7 @@ async fn main() {
         jwt_secret: config.jwt_secret,
         session_repository,
         session_service,
-        s3_client,
+        storage,
     };
 
     let app = Router::new()
