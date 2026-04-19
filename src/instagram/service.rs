@@ -290,7 +290,7 @@ mod tests {
             client_id: "test-client-id".to_string(),
             client_secret: "test-client-secret".to_string(),
             redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-            graph_api_version: "v19.0".to_string(),
+            graph_api_version: "v25.0".to_string(),
         }
     }
 
@@ -338,7 +338,7 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path_regex("/v19.0/oauth/access_token"))
+            .and(path_regex("/v25.0/oauth/access_token"))
             .and(query_param("code", "auth-code-123"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 r#"{"access_token":"short-token","token_type":"bearer"}"#,
@@ -360,7 +360,7 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path_regex("/v19.0/oauth/access_token"))
+            .and(path_regex("/v25.0/oauth/access_token"))
             .respond_with(ResponseTemplate::new(401))
             .mount(&mock_server)
             .await;
@@ -480,7 +480,7 @@ mod tests {
             client_id: "id".to_string(),
             client_secret: "secret".to_string(),
             redirect_uri: "http://localhost/callback".to_string(),
-            graph_api_version: "v19.0".to_string(),
+            graph_api_version: "v25.0".to_string(),
         };
         InstagramService::new(IgClient::new(cfg), OAuthTokenRepository::new(pool))
     }

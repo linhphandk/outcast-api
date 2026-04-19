@@ -223,7 +223,7 @@ Environment variables (using `__` as separator):
 | `INSTAGRAM__CLIENT_ID` | Instagram / Facebook app client ID |
 | `INSTAGRAM__CLIENT_SECRET` | Instagram / Facebook app client secret |
 | `INSTAGRAM__REDIRECT_URI` | OAuth redirect URI |
-| `INSTAGRAM__GRAPH_API_VERSION` | Graph API version (default: `v19.0`) |
+| `INSTAGRAM__GRAPH_API_VERSION` | Graph API version (default: `v25.0`) |
 | `TIKTOK__CLIENT_KEY` | TikTok app client key |
 | `TIKTOK__CLIENT_SECRET` | TikTok app client secret |
 | `TIKTOK__REDIRECT_URI` | TikTok OAuth redirect URI |

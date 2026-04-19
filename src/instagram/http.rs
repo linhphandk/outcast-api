@@ -403,7 +403,7 @@ mod tests {
             client_id: "test-client-id".to_string(),
             client_secret: "test-client-secret".to_string(),
             redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-            graph_api_version: "v19.0".to_string(),
+            graph_api_version: "v25.0".to_string(),
         };
 
         TestState {
@@ -562,7 +562,7 @@ mod tests {
                 client_id: "test-client-id".to_string(),
                 client_secret: "test-client-secret".to_string(),
                 redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-                graph_api_version: "v19.0".to_string(),
+                graph_api_version: "v25.0".to_string(),
             };
 
             let state = IntegrationTestState {

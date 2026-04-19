@@ -1048,7 +1048,7 @@ JWT_SECRET=your-secret-jwt-key-here
 INSTAGRAM__CLIENT_ID=your-instagram-client-id
 INSTAGRAM__CLIENT_SECRET=your-instagram-client-secret
 INSTAGRAM__REDIRECT_URI=http://localhost:3000/oauth/instagram/callback
-INSTAGRAM__GRAPH_API_VERSION=v19.0
+INSTAGRAM__GRAPH_API_VERSION=v25.0
 ```
 
 > ⚠️ **Important:** The `PASSWORD_PEPPER` and `JWT_SECRET` should be long, random strings in production. For local development, any string works.
@@ -1131,7 +1131,7 @@ The application reads its configuration from environment variables. The separato
    - `INSTAGRAM__CLIENT_ID` (Meta App ID / Client ID)
    - `INSTAGRAM__CLIENT_SECRET` (Meta App Secret / Client Secret)
    - `INSTAGRAM__REDIRECT_URI` (OAuth callback URL)
-   - `INSTAGRAM__GRAPH_API_VERSION` (optional, defaults to `v19.0`)
+   - `INSTAGRAM__GRAPH_API_VERSION` (optional, defaults to `v25.0`)
 
 | Variable | Description | Example Value |
 |---|---|---|
@@ -1147,7 +1147,7 @@ The application reads its configuration from environment variables. The separato
 | `INSTAGRAM__CLIENT_ID` | Instagram OAuth client ID from Meta app | `1234567890` |
 | `INSTAGRAM__CLIENT_SECRET` | Instagram OAuth client secret from Meta app | (Meta app secret) |
 | `INSTAGRAM__REDIRECT_URI` | Instagram OAuth callback URL configured in Meta app | `http://localhost:3000/oauth/instagram/callback` |
-| `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version | `v19.0` |
+| `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version | `v25.0` |
 
 > **Security note:** `PASSWORD_PEPPER` and `JWT_SECRET` are extremely sensitive. If someone obtains the `JWT_SECRET`, they can create fake tokens and impersonate any user. If someone obtains the `PASSWORD_PEPPER`, they can attempt to crack password hashes from the database. Never commit these values to version control.
 

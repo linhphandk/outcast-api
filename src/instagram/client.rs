@@ -528,7 +528,7 @@ mod tests {
             client_id: "test-client-id".to_string(),
             client_secret: "test-client-secret".to_string(),
             redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-            graph_api_version: "v19.0".to_string(),
+            graph_api_version: "v25.0".to_string(),
         }
     }
 
@@ -539,7 +539,7 @@ mod tests {
         let parsed = url::Url::parse(&url).expect("URL should parse");
 
         assert_eq!(parsed.host_str(), Some("www.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/dialog/oauth");
+        assert_eq!(parsed.path(), "/v25.0/dialog/oauth");
 
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
         assert_eq!(query.get("client_id"), Some(&"test-client-id".to_string()));
@@ -594,7 +594,7 @@ mod tests {
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/oauth/access_token");
+        assert_eq!(parsed.path(), "/v25.0/oauth/access_token");
         assert_eq!(query.get("client_id"), Some(&"test-client-id".to_string()));
         assert_eq!(
             query.get("client_secret"),
@@ -657,7 +657,7 @@ mod tests {
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/me/accounts");
+        assert_eq!(parsed.path(), "/v25.0/me/accounts");
         assert_eq!(
             query.get("access_token"),
             Some(&"my-token/unsafe?x=1".to_string())
@@ -672,7 +672,7 @@ mod tests {
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/123456789");
+        assert_eq!(parsed.path(), "/v25.0/123456789");
         assert_eq!(
             query.get("fields"),
             Some(&"instagram_business_account".to_string())
@@ -688,7 +688,7 @@ mod tests {
                 { "id": "222" }
             ],
             "paging": {
-                "next": "https://graph.facebook.com/v19.0/me/accounts?after=abc"
+                "next": "https://graph.facebook.com/v25.0/me/accounts?after=abc"
             }
         }"#;
 
@@ -698,7 +698,7 @@ mod tests {
         assert_eq!(parsed.data[1].id, "222");
         assert_eq!(
             parsed.paging.unwrap().next.unwrap(),
-            "https://graph.facebook.com/v19.0/me/accounts?after=abc"
+            "https://graph.facebook.com/v25.0/me/accounts?after=abc"
         );
     }
 
@@ -739,7 +739,7 @@ mod tests {
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/17841400000000001");
+        assert_eq!(parsed.path(), "/v25.0/17841400000000001");
         assert_eq!(
             query.get("fields"),
             Some(&"username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website".to_string())
@@ -802,7 +802,7 @@ mod tests {
         let query: HashMap<_, _> = parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parsed.host_str(), Some("graph.facebook.com"));
-        assert_eq!(parsed.path(), "/v19.0/17841400000000001/media");
+        assert_eq!(parsed.path(), "/v25.0/17841400000000001/media");
         assert_eq!(
             query.get("fields"),
             Some(&"id,like_count,comments_count,timestamp,media_type".to_string())

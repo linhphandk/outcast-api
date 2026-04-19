@@ -43,4 +43,4 @@ cargo test
    - `INSTAGRAM__CLIENT_ID` ← Meta App ID / Client ID
    - `INSTAGRAM__CLIENT_SECRET` ← Meta App Secret / Client Secret
    - `INSTAGRAM__REDIRECT_URI` ← OAuth callback URL configured in Meta app settings (default: `http://localhost:3000/oauth/instagram/callback`)
-4. Optionally set `INSTAGRAM__GRAPH_API_VERSION` (defaults to `v19.0`).
+4. Optionally set `INSTAGRAM__GRAPH_API_VERSION` (defaults to `v25.0`).

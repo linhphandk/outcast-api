@@ -121,7 +121,7 @@ fn build_app(pool: deadpool_diesel::postgres::Pool, mock_server: &MockServer) ->
         client_id: "test-client-id".to_string(),
         client_secret: "test-client-secret".to_string(),
         redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-        graph_api_version: "v19.0".to_string(),
+        graph_api_version: "v25.0".to_string(),
     };
     let base_url = mock_server.uri();
     let instagram_client = IgClient::new_with_base_urls(
@@ -222,7 +222,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v19.0/me/accounts"))
+            .and(path("/v25.0/me/accounts"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [{"id": "page-1"}]
             })))
@@ -230,7 +230,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v19.0/page-1"))
+            .and(path("/v25.0/page-1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "instagram_business_account": {"id": "ig-user-1"},
                 "id": "page-1"
@@ -239,7 +239,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v19.0/ig-user-1/media"))
+            .and(path("/v25.0/ig-user-1/media"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
                     {"id": "media-1", "like_count": 5, "comments_count": 3},
@@ -250,7 +250,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v19.0/ig-user-1"))
+            .and(path("/v25.0/ig-user-1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "ig-user-1",
                 "username": "test_creator",

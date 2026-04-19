@@ -3,7 +3,7 @@ use deadpool_postgres::Config as PgConfig;
 use serde::Deserialize;
 
 fn default_instagram_graph_api_version() -> String {
-    "v19.0".to_string()
+    "v25.0".to_string()
 }
 
 fn default_tiktok_scopes() -> String {
@@ -164,7 +164,7 @@ mod tests {
             config.redirect_uri,
             "http://localhost:3000/oauth/instagram/callback"
         );
-        assert_eq!(config.graph_api_version, "v19.0");
+        assert_eq!(config.graph_api_version, "v25.0");
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
                 INSTAGRAM_REDIRECT_URI,
                 "http://localhost:3000/oauth/instagram/callback",
             );
-            std::env::set_var(INSTAGRAM_GRAPH_API_VERSION, "v19.0");
+            std::env::set_var(INSTAGRAM_GRAPH_API_VERSION, "v25.0");
         }
 
         let result = InstagramConfig::from_env();

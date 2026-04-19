@@ -118,7 +118,7 @@ fn build_app(pool: deadpool_diesel::postgres::Pool, mock_server: &MockServer) ->
         client_id: "test-client-id".to_string(),
         client_secret: "test-client-secret".to_string(),
         redirect_uri: "http://localhost:3000/oauth/instagram/callback".to_string(),
-        graph_api_version: "v19.0".to_string(),
+        graph_api_version: "v25.0".to_string(),
     };
     let base_url = mock_server.uri();
     let instagram_client = IgClient::new_with_base_urls(
@@ -198,7 +198,7 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
         .unwrap();
 
     Mock::given(method("GET"))
-        .and(path("/v19.0/oauth/access_token"))
+        .and(path("/v25.0/oauth/access_token"))
         .and(query_param("code", "oauth-code-123"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "short-lived-token",

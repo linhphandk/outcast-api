@@ -23,7 +23,7 @@ pub fn create_jwt(
     debug!("Creating JWT");
     let now = Utc::now();
     let expiration = now
-        .checked_add_signed(Duration::minutes(15))
+        .checked_add_signed(Duration::minutes(120))
         .expect("valid timestamp")
         .timestamp();
 
