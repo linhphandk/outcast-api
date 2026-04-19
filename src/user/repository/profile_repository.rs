@@ -245,6 +245,39 @@ impl ProfileRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, platform = %platform))]
+    pub async fn find_social_handle_last_synced_at_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<Option<DateTime<Utc>>, ProfileRepositoryError> {
+        debug!("Finding social handle last_synced_at by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+
+        conn.interact(move |conn| {
+            social_handles::table
+                .filter(social_handles::profile_id.eq(profile_id))
+                .filter(social_handles::platform.eq(platform))
+                .first::<SocialHandle>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error finding social handle sync timestamp");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error finding social handle sync timestamp");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|value| value.and_then(|handle| handle.last_synced_at))
+    }
 }
 
 #[async_trait]
@@ -790,16 +823,17 @@ impl ProfileRepositoryTrait for ProfileRepository {
         let now = Utc::now();
 
         conn.interact(move |conn| {
-            let new_handle = NewSocialHandle {
-                profile_id,
-                platform: platform.clone(),
-                handle: handle.clone(),
-                url: url.clone(),
-                follower_count,
-            };
-
             diesel::insert_into(social_handles::table)
-                .values(&new_handle)
+                .values((
+                    social_handles::profile_id.eq(profile_id),
+                    social_handles::platform.eq(platform.clone()),
+                    social_handles::handle.eq(handle.clone()),
+                    social_handles::url.eq(url.clone()),
+                    social_handles::follower_count.eq(follower_count),
+                    social_handles::engagement_rate.eq(engagement_rate.clone()),
+                    social_handles::last_synced_at.eq(Some(last_synced_at)),
+                    social_handles::updated_at.eq(Some(now)),
+                ))
                 .on_conflict((social_handles::profile_id, social_handles::platform))
                 .do_update()
                 .set((

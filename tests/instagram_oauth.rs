@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use axum::{Router, body::Body, http::Request};
+use chrono::Utc;
+use bigdecimal::BigDecimal;
 use diesel::prelude::*;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use http_body_util::BodyExt;
@@ -289,4 +291,58 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
     );
 
     assert_eq!(oauth_token_count(&pool, profile.id).await, 0);
+}
+
+#[tokio::test]
+async fn instagram_refresh_within_cooldown_returns_429_with_retry_after() {
+    let (_container, pool) = setup_test_db().await;
+    let mock_server = MockServer::start().await;
+    let app = build_app(pool.clone(), &mock_server);
+    let created = create_user(&app, "ig_refresh_cooldown@example.com").await;
+
+    let profile_repo = ProfileRepository::new(pool);
+    let profile = profile_repo
+        .create(
+            created.id,
+            "IG User".to_string(),
+            "Creator".to_string(),
+            "tech".to_string(),
+            "https://example.com/avatar.png".to_string(),
+            "ig_refresh_user".to_string(),
+        )
+        .await
+        .unwrap();
+
+    profile_repo
+        .upsert_social_handle_sync_by_platform(
+            profile.id,
+            "instagram",
+            "ig_refresh_user".to_string(),
+            "https://instagram.com/ig_refresh_user".to_string(),
+            123,
+            BigDecimal::from(1),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+    let refresh_request = Request::builder()
+        .method("POST")
+        .uri("/oauth/instagram/refresh")
+        .header("Authorization", format!("Bearer {}", created.token))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(refresh_request).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    let retry_after = response
+        .headers()
+        .get(axum::http::header::RETRY_AFTER)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!((299..=300).contains(&retry_after));
 }
