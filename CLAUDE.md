@@ -224,6 +224,12 @@ Environment variables (using `__` as separator):
 | `INSTAGRAM__CLIENT_SECRET` | Instagram / Facebook app client secret |
 | `INSTAGRAM__REDIRECT_URI` | OAuth redirect URI |
 | `INSTAGRAM__GRAPH_API_VERSION` | Graph API version (default: `v19.0`) |
+| `TIKTOK__CLIENT_KEY` | TikTok app client key |
+| `TIKTOK__CLIENT_SECRET` | TikTok app client secret |
+| `TIKTOK__REDIRECT_URI` | TikTok OAuth redirect URI |
+| `TIKTOK__SCOPES` | Optional TikTok scopes (default: `user.info.basic,user.info.profile,user.info.stats`) |
+| `TIKTOK__API_BASE_URL` | Optional TikTok API base URL (default: `https://open.tiktokapis.com`) |
+| `TIKTOK__AUTH_BASE_URL` | Optional TikTok auth base URL (default: `https://www.tiktok.com`) |
 | `S3__BUCKET` | S3 bucket name |
 | `S3__REGION` | AWS region |
 | `S3__ENDPOINT_URL` | Optional custom endpoint (e.g. Moto for tests) |
