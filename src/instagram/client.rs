@@ -1,6 +1,7 @@
-use std::time::Duration;
 use crate::config::InstagramConfig;
 use crate::instagram::error::IgError;
+use std::time::Duration;
+use tracing::{error, warn};
 
 const FACEBOOK_OAUTH_HOST: &str = "www.facebook.com";
 const FACEBOOK_GRAPH_HOST: &str = "graph.facebook.com";
@@ -23,6 +24,18 @@ pub struct IgClient {
     facebook_oauth_base_url: String,
     facebook_graph_base_url: String,
     instagram_graph_base_url: String,
+}
+
+/// Wrapper for token values that must never be emitted raw in logs.
+///
+/// Use this in structured logging fields whenever access tokens might be
+/// attached to diagnostics.
+pub struct RedactedToken<'a>(pub &'a str);
+
+impl std::fmt::Debug for RedactedToken<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RedactedToken(len={})", self.0.len())
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
@@ -155,6 +168,7 @@ impl IgClient {
         url.to_string()
     }
 
+    #[tracing::instrument(skip(self, code), fields(profile_id, ig_user_id))]
     pub async fn exchange_code(&self, code: &str) -> Result<CodeExchange, IgError> {
         let res = self.http.get(self.build_exchange_url(code)).send().await?;
         if !res.status().is_success() {
@@ -168,34 +182,40 @@ impl IgClient {
         Ok(serde_json::from_str(&body)?)
     }
 
-    pub async fn exchange_for_long_lived(&self, short: &str) -> Result<CodeExchange, IgError> {
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
+    pub async fn exchange_for_long_lived(&self, token: &str) -> Result<CodeExchange, IgError> {
         let res = self
             .http
-            .get(self.build_long_lived_exchange_url(short))
+            .get(self.build_long_lived_exchange_url(token))
             .send()
             .await?;
         if !res.status().is_success() {
             let status = res.status();
             let headers = res.headers().clone();
             let body = res.text().await?;
-            return Err(IgError::from_response_parts(status, &headers, body));
+            let error = IgError::from_response_parts(status, &headers, body);
+            log_ig_error("exchange_for_long_lived", &error, token, None);
+            return Err(error);
         }
 
         let body = res.text().await?;
         Ok(serde_json::from_str(&body)?)
     }
 
-    pub async fn refresh_long_lived_token(&self, long_lived: &str) -> Result<CodeExchange, IgError> {
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
+    pub async fn refresh_long_lived_token(&self, token: &str) -> Result<CodeExchange, IgError> {
         let res = self
             .http
-            .get(self.build_long_lived_refresh_url(long_lived))
+            .get(self.build_long_lived_refresh_url(token))
             .send()
             .await?;
         if !res.status().is_success() {
             let status = res.status();
             let headers = res.headers().clone();
             let body = res.text().await?;
-            return Err(IgError::from_response_parts(status, &headers, body));
+            let error = IgError::from_response_parts(status, &headers, body);
+            log_ig_error("refresh_long_lived_token", &error, token, None);
+            return Err(error);
         }
 
         let body = res.text().await?;
@@ -253,6 +273,7 @@ impl IgClient {
     /// returned, queries `GET /{page_id}?fields=instagram_business_account`.
     /// Returns the first connected IG Business Account ID found, or
     /// `IgError::NoBusinessAccount` when none of the pages have one.
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     pub async fn fetch_business_account(&self, token: &str) -> Result<String, IgError> {
         let mut next_url: Option<String> = Some(self.build_pages_url(token).to_string());
 
@@ -262,7 +283,9 @@ impl IgClient {
                 let status = res.status();
                 let headers = res.headers().clone();
                 let body = res.text().await?;
-                return Err(IgError::from_response_parts(status, &headers, body));
+                let error = IgError::from_response_parts(status, &headers, body);
+                log_ig_error("fetch_business_account", &error, token, None);
+                return Err(error);
             }
 
             let body = res.text().await?;
@@ -288,8 +311,7 @@ impl IgClient {
         ))
         .expect("BUG: Failed to construct Facebook Graph pages URL");
 
-        url.query_pairs_mut()
-            .append_pair("access_token", token);
+        url.query_pairs_mut().append_pair("access_token", token);
         url
     }
 
@@ -309,6 +331,7 @@ impl IgClient {
     }
 
     /// Query a single Facebook Page for its connected IG Business Account.
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     async fn fetch_page_ig_account(
         &self,
         token: &str,
@@ -324,7 +347,9 @@ impl IgClient {
             let status = res.status();
             let headers = res.headers().clone();
             let body = res.text().await?;
-            return Err(IgError::from_response_parts(status, &headers, body));
+            let error = IgError::from_response_parts(status, &headers, body);
+            log_ig_error("fetch_page_ig_account", &error, token, None);
+            return Err(error);
         }
 
         let body = res.text().await?;
@@ -338,6 +363,7 @@ impl IgClient {
     /// Calls `GET /{ig_user_id}?fields=username,name,biography,
     /// followers_count,follows_count,media_count,profile_picture_url,website`
     /// on the Facebook Graph API.
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id = %ig_user_id))]
     pub async fn fetch_profile_stats(
         &self,
         token: &str,
@@ -353,7 +379,9 @@ impl IgClient {
             let status = res.status();
             let headers = res.headers().clone();
             let body = res.text().await?;
-            return Err(IgError::from_response_parts(status, &headers, body));
+            let error = IgError::from_response_parts(status, &headers, body);
+            log_ig_error("fetch_profile_stats", &error, token, Some(ig_user_id));
+            return Err(error);
         }
 
         let body = res.text().await?;
@@ -386,6 +414,7 @@ impl IgClient {
     ///
     /// The returned [`RecentMediaSummary`] contains the raw items together with
     /// pre-computed totals and an average engagement rate per post.
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id = %ig_user_id))]
     pub async fn fetch_recent_media(
         &self,
         token: &str,
@@ -394,7 +423,10 @@ impl IgClient {
     ) -> Result<RecentMediaSummary, IgError> {
         let res = self
             .http
-            .get(self.build_recent_media_url(token, ig_user_id, limit).to_string())
+            .get(
+                self.build_recent_media_url(token, ig_user_id, limit)
+                    .to_string(),
+            )
             .send()
             .await?;
 
@@ -402,7 +434,9 @@ impl IgClient {
             let status = res.status();
             let headers = res.headers().clone();
             let body = res.text().await?;
-            return Err(IgError::from_response_parts(status, &headers, body));
+            let error = IgError::from_response_parts(status, &headers, body);
+            log_ig_error("fetch_recent_media", &error, token, Some(ig_user_id));
+            return Err(error);
         }
 
         let body = res.text().await?;
@@ -425,12 +459,7 @@ impl IgClient {
         })
     }
 
-    fn build_recent_media_url(
-        &self,
-        token: &str,
-        ig_user_id: &str,
-        limit: u32,
-    ) -> url::Url {
+    fn build_recent_media_url(&self, token: &str, ig_user_id: &str, limit: u32) -> url::Url {
         let mut url = url::Url::parse(&format!(
             "{}/{}/{}/media",
             self.facebook_graph_base_url.trim_end_matches('/'),
@@ -450,14 +479,47 @@ impl IgClient {
     }
 }
 
+fn log_ig_error(operation: &'static str, error: &IgError, token: &str, ig_user_id: Option<&str>) {
+    match error {
+        IgError::RateLimited { retry_after } => warn!(
+            operation,
+            retry_after_secs = retry_after.map(|duration| duration.as_secs()),
+            token = ?RedactedToken(token),
+            ig_user_id,
+            "Instagram API rate limited",
+        ),
+        IgError::Graph { code, subcode, .. } => error!(
+            operation,
+            graph_code = *code,
+            graph_subcode = *subcode,
+            token = ?RedactedToken(token),
+            ig_user_id,
+            "Instagram Graph API returned an error",
+        ),
+        IgError::Http { status, .. } => error!(
+            operation,
+            status = *status,
+            token = ?RedactedToken(token),
+            ig_user_id,
+            "Instagram API HTTP error",
+        ),
+        _ => warn!(
+            operation,
+            token = ?RedactedToken(token),
+            ig_user_id,
+            "Instagram API call failed",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse,
-        PagesResponse, ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT,
-        SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
+        CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse, PagesResponse,
+        ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC,
+        SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -615,10 +677,7 @@ mod tests {
             query.get("fields"),
             Some(&"instagram_business_account".to_string())
         );
-        assert_eq!(
-            query.get("access_token"),
-            Some(&"my-token".to_string())
-        );
+        assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
     }
 
     #[test]
@@ -685,10 +744,7 @@ mod tests {
             query.get("fields"),
             Some(&"username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website".to_string())
         );
-        assert_eq!(
-            query.get("access_token"),
-            Some(&"my-token".to_string())
-        );
+        assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
     }
 
     #[test]
@@ -781,7 +837,10 @@ mod tests {
         assert_eq!(parsed.data[0].id, "media1");
         assert_eq!(parsed.data[0].like_count, Some(100));
         assert_eq!(parsed.data[0].comments_count, Some(10));
-        assert_eq!(parsed.data[0].timestamp.as_deref(), Some("2026-04-01T12:00:00+0000"));
+        assert_eq!(
+            parsed.data[0].timestamp.as_deref(),
+            Some("2026-04-01T12:00:00+0000")
+        );
         assert_eq!(parsed.data[0].media_type.as_deref(), Some("IMAGE"));
         assert_eq!(parsed.data[1].id, "media2");
         assert_eq!(parsed.data[1].like_count, Some(200));
@@ -889,5 +948,13 @@ mod tests {
         assert_eq!(summary.total_likes, 50);
         assert_eq!(summary.total_comments, 10);
         assert!((summary.engagement_rate - 30.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn redacted_token_debug_does_not_include_raw_token() {
+        let raw = "ig-secret-token-123";
+        let formatted = format!("{:?}", super::RedactedToken(raw));
+        assert!(!formatted.contains(raw));
+        assert!(formatted.contains("RedactedToken"));
     }
 }

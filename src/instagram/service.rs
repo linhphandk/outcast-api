@@ -1,7 +1,8 @@
-use chrono::{DateTime, Utc};
 use bigdecimal::BigDecimal;
+use chrono::{DateTime, Utc};
 use std::str::FromStr;
-use tracing::{debug, error, info, instrument, warn};
+use std::time::Instant;
+use tracing::{Span, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::instagram::client::{CodeExchange, IgClient};
@@ -68,7 +69,7 @@ impl InstagramService {
         let result = self.client.exchange_code(code).await;
         match &result {
             Ok(_) => debug!("Instagram code exchange successful"),
-            Err(e) => error!(error = %e, "Instagram code exchange failed"),
+            Err(error) => log_sync_ig_error(error),
         }
         result
     }
@@ -78,8 +79,10 @@ impl InstagramService {
         info!("Exchanging Instagram short-lived token for long-lived token");
         let result = self.client.exchange_for_long_lived(short).await;
         match &result {
-            Ok(token) => debug!(expires_in = ?token.expires_in, "Long-lived token exchange successful"),
-            Err(e) => error!(error = %e, "Long-lived token exchange failed"),
+            Ok(token) => {
+                debug!(expires_in = ?token.expires_in, "Long-lived token exchange successful")
+            }
+            Err(error) => log_sync_ig_error(error),
         }
         result
     }
@@ -131,18 +134,34 @@ impl InstagramService {
         result
     }
 
-    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    #[tracing::instrument(skip(self), fields(profile_id = %profile_id, ig_user_id))]
     pub async fn sync_profile(&self, profile_id: Uuid) -> Result<SocialHandle, InstagramSyncError> {
+        let started_at = Instant::now();
         let oauth_token = self
             .oauth_repository
             .find_by_profile_and_provider(profile_id, "instagram")
             .await?
             .ok_or(InstagramSyncError::NotConnected)?;
 
+        let existing_followers = self
+            .profile_repository
+            .as_ref()
+            .ok_or(InstagramSyncError::ServiceMisconfigured)?
+            .find_social_handles_by_profile_id(profile_id)
+            .await?
+            .into_iter()
+            .find(|handle| handle.platform == "instagram")
+            .map(|handle| handle.follower_count)
+            .unwrap_or(0);
+
         let refreshed = self
             .client
             .refresh_long_lived_token(&oauth_token.access_token)
-            .await?;
+            .await
+            .map_err(|error| {
+                log_sync_ig_error(&error);
+                InstagramSyncError::Instagram(error)
+            })?;
 
         let expires_at = refreshed.expires_in.and_then(|seconds| {
             i64::try_from(seconds)
@@ -165,15 +184,28 @@ impl InstagramService {
         let ig_user_id = self
             .client
             .fetch_business_account(&persisted_token.access_token)
-            .await?;
+            .await
+            .map_err(|error| {
+                log_sync_ig_error(&error);
+                InstagramSyncError::Instagram(error)
+            })?;
+        Span::current().record("ig_user_id", tracing::field::display(&ig_user_id));
         let profile_stats = self
             .client
             .fetch_profile_stats(&persisted_token.access_token, &ig_user_id)
-            .await?;
+            .await
+            .map_err(|error| {
+                log_sync_ig_error(&error);
+                InstagramSyncError::Instagram(error)
+            })?;
         let recent_media = self
             .client
             .fetch_recent_media(&persisted_token.access_token, &ig_user_id, 25)
-            .await?;
+            .await
+            .map_err(|error| {
+                log_sync_ig_error(&error);
+                InstagramSyncError::Instagram(error)
+            })?;
 
         let username = profile_stats.username.unwrap_or_default();
         let url = if username.is_empty() {
@@ -193,7 +225,9 @@ impl InstagramService {
             .as_ref()
             .ok_or(InstagramSyncError::ServiceMisconfigured)?;
 
-        profile_repository
+        let followers_count_delta = i64::from(follower_count) - i64::from(existing_followers);
+        let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let social_handle = profile_repository
             .upsert_social_handle_sync_by_platform(
                 profile_id,
                 "instagram",
@@ -204,7 +238,36 @@ impl InstagramService {
                 Utc::now(),
             )
             .await
-            .map_err(InstagramSyncError::from)
+            .map_err(InstagramSyncError::from)?;
+
+        info!(
+            duration_ms,
+            followers_count_delta,
+            engagement_rate = recent_media.engagement_rate,
+            "Instagram profile sync completed",
+        );
+
+        Ok(social_handle)
+    }
+}
+
+/// Service-level Instagram sync error logging without token context.
+///
+/// `IgClient` emits token-aware diagnostics with redacted token fields; this
+/// helper is only used where token context is unavailable in the service layer.
+fn log_sync_ig_error(error: &IgError) {
+    match error {
+        IgError::RateLimited { retry_after } => warn!(
+            retry_after_secs = retry_after.map(|duration| duration.as_secs()),
+            "Instagram sync rate-limited",
+        ),
+        IgError::Graph { code, subcode, .. } => error!(
+            graph_code = *code,
+            graph_subcode = *subcode,
+            "Instagram sync Graph API failure",
+        ),
+        IgError::Http { status, .. } => error!(status = *status, "Instagram sync HTTP failure",),
+        _ => warn!("Instagram sync failed"),
     }
 }
 
@@ -277,12 +340,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex("/v19.0/oauth/access_token"))
             .and(query_param("code", "auth-code-123"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(
-                    r#"{"access_token":"short-token","token_type":"bearer"}"#,
-                    "application/json",
-                ),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"short-token","token_type":"bearer"}"#,
+                "application/json",
+            ))
             .mount(&mock_server)
             .await;
 
@@ -319,12 +380,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex("/access_token"))
             .and(query_param("grant_type", "ig_exchange_token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(
-                    r#"{"access_token":"long-token","token_type":"bearer","expires_in":5183944}"#,
-                    "application/json",
-                ),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"long-token","token_type":"bearer","expires_in":5183944}"#,
+                "application/json",
+            ))
             .mount(&mock_server)
             .await;
 
@@ -495,6 +554,9 @@ mod tests {
         // No token inserted — delete should return false.
         let deleted = service.delete_oauth_token(profile_id, "instagram").await;
         assert!(deleted.is_ok());
-        assert!(!deleted.unwrap(), "should return false when no token present");
+        assert!(
+            !deleted.unwrap(),
+            "should return false when no token present"
+        );
     }
 }
