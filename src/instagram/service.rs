@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use bigdecimal::BigDecimal;
+use std::str::FromStr;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -7,11 +9,29 @@ use crate::instagram::error::IgError;
 use crate::instagram::repository::{
     OAuthToken, OAuthTokenRepository, OAuthTokenRepositoryError, OAuthTokenRepositoryTrait,
 };
+use crate::user::repository::profile_repository::{
+    ProfileRepository, ProfileRepositoryError, ProfileRepositoryTrait, SocialHandle,
+};
 
 #[derive(Clone)]
 pub struct InstagramService {
     client: IgClient,
     oauth_repository: OAuthTokenRepository,
+    profile_repository: Option<ProfileRepository>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InstagramSyncError {
+    #[error(transparent)]
+    OAuthRepository(#[from] OAuthTokenRepositoryError),
+    #[error(transparent)]
+    ProfileRepository(#[from] ProfileRepositoryError),
+    #[error(transparent)]
+    Instagram(#[from] IgError),
+    #[error("Instagram account is not connected")]
+    NotConnected,
+    #[error("Instagram service is missing profile repository dependency")]
+    ServiceMisconfigured,
 }
 
 impl InstagramService {
@@ -19,6 +39,19 @@ impl InstagramService {
         Self {
             client,
             oauth_repository,
+            profile_repository: None,
+        }
+    }
+
+    pub fn new_with_profile_repository(
+        client: IgClient,
+        oauth_repository: OAuthTokenRepository,
+        profile_repository: ProfileRepository,
+    ) -> Self {
+        Self {
+            client,
+            oauth_repository,
+            profile_repository: Some(profile_repository),
         }
     }
 
@@ -96,6 +129,82 @@ impl InstagramService {
             Err(e) => error!(error = %e, "Failed to delete OAuth token"),
         }
         result
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id))]
+    pub async fn sync_profile(&self, profile_id: Uuid) -> Result<SocialHandle, InstagramSyncError> {
+        let oauth_token = self
+            .oauth_repository
+            .find_by_profile_and_provider(profile_id, "instagram")
+            .await?
+            .ok_or(InstagramSyncError::NotConnected)?;
+
+        let refreshed = self
+            .client
+            .refresh_long_lived_token(&oauth_token.access_token)
+            .await?;
+
+        let expires_at = refreshed.expires_in.and_then(|seconds| {
+            i64::try_from(seconds)
+                .ok()
+                .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds))
+        });
+
+        let persisted_token = self
+            .upsert_oauth_token(
+                profile_id,
+                "instagram",
+                &refreshed.access_token,
+                oauth_token.refresh_token.as_deref(),
+                expires_at,
+                &oauth_token.provider_user_id,
+                &oauth_token.scopes,
+            )
+            .await?;
+
+        let ig_user_id = self
+            .client
+            .fetch_business_account(&persisted_token.access_token)
+            .await?;
+        let profile_stats = self
+            .client
+            .fetch_profile_stats(&persisted_token.access_token, &ig_user_id)
+            .await?;
+        let recent_media = self
+            .client
+            .fetch_recent_media(&persisted_token.access_token, &ig_user_id, 25)
+            .await?;
+
+        let username = profile_stats.username.unwrap_or_default();
+        let url = if username.is_empty() {
+            String::new()
+        } else {
+            format!("https://instagram.com/{username}")
+        };
+        let follower_count = profile_stats
+            .followers_count
+            .unwrap_or(0)
+            .clamp(0, i64::from(i32::MAX)) as i32;
+        let engagement_rate =
+            BigDecimal::from_str(&recent_media.engagement_rate.to_string()).unwrap_or_default();
+
+        let profile_repository = self
+            .profile_repository
+            .as_ref()
+            .ok_or(InstagramSyncError::ServiceMisconfigured)?;
+
+        profile_repository
+            .upsert_social_handle_sync_by_platform(
+                profile_id,
+                "instagram",
+                username,
+                url,
+                follower_count,
+                engagement_rate,
+                Utc::now(),
+            )
+            .await
+            .map_err(InstagramSyncError::from)
     }
 }
 

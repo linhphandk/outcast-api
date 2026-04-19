@@ -228,6 +228,17 @@ pub trait ProfileRepositoryTrait {
         profile_id: Uuid,
         platform: &str,
     ) -> Result<(), ProfileRepositoryError>;
+
+    async fn upsert_social_handle_sync_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+        handle: String,
+        url: String,
+        follower_count: i32,
+        engagement_rate: BigDecimal,
+        last_synced_at: DateTime<Utc>,
+    ) -> Result<SocialHandle, ProfileRepositoryError>;
 }
 
 impl ProfileRepository {
@@ -756,6 +767,60 @@ impl ProfileRepositoryTrait for ProfileRepository {
         })?;
 
         Ok(())
+    }
+
+    #[instrument(skip(self, handle, url, engagement_rate), fields(profile_id = %profile_id, platform = %platform))]
+    async fn upsert_social_handle_sync_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+        handle: String,
+        url: String,
+        follower_count: i32,
+        engagement_rate: BigDecimal,
+        last_synced_at: DateTime<Utc>,
+    ) -> Result<SocialHandle, ProfileRepositoryError> {
+        debug!("Upserting social handle sync payload by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+        let now = Utc::now();
+
+        conn.interact(move |conn| {
+            let new_handle = NewSocialHandle {
+                profile_id,
+                platform: platform.clone(),
+                handle: handle.clone(),
+                url: url.clone(),
+                follower_count,
+            };
+
+            diesel::insert_into(social_handles::table)
+                .values(&new_handle)
+                .on_conflict((social_handles::profile_id, social_handles::platform))
+                .do_update()
+                .set((
+                    social_handles::handle.eq(handle),
+                    social_handles::url.eq(url),
+                    social_handles::follower_count.eq(follower_count),
+                    social_handles::engagement_rate.eq(engagement_rate),
+                    social_handles::last_synced_at.eq(Some(last_synced_at)),
+                    social_handles::updated_at.eq(Some(now)),
+                ))
+                .get_result::<SocialHandle>(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle sync upsert");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle sync upsert");
+            ProfileRepositoryError::DieselError(e)
+        })
     }
 }
 
