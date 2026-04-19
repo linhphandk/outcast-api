@@ -24,8 +24,6 @@ use crate::user::repository::profile_repository::{
 };
 
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
-const EMPTY_PROVIDER_USER_ID: &str = "";
-const EMPTY_SCOPES: &str = "";
 const INSTAGRAM_REFRESH_COOLDOWN: Duration = Duration::minutes(5);
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -169,8 +167,8 @@ pub async fn instagram_callback(
             &long.access_token,
             None,
             expires_at,
-            EMPTY_PROVIDER_USER_ID,
-            EMPTY_SCOPES,
+            &short.user_id,
+            &short.permissions,
         )
         .await
     {

@@ -197,13 +197,11 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
         .await
         .unwrap();
 
-    Mock::given(method("GET"))
-        .and(path("/v25.0/oauth/access_token"))
-        .and(query_param("code", "oauth-code-123"))
+    Mock::given(method("POST"))
+        .and(path("/oauth/access_token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "short-lived-token",
-            "token_type": "bearer",
-            "expires_in": 3600
+            "user_id": 17841400000000001u64
         })))
         .mount(&mock_server)
         .await;

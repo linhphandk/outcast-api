@@ -222,24 +222,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v25.0/me/accounts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "page-1"}]
-            })))
-            .mount(mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v25.0/page-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "instagram_business_account": {"id": "ig-user-1"},
-                "id": "page-1"
-            })))
-            .mount(mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v25.0/ig-user-1/media"))
+            .and(path("/v25.0/me/media"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [
                     {"id": "media-1", "like_count": 5, "comments_count": 3},
@@ -250,7 +233,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v25.0/ig-user-1"))
+            .and(path("/v25.0/me"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "ig-user-1",
                 "username": "test_creator",
