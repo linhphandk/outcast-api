@@ -21,12 +21,14 @@ impl TikTokClient {
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("outcast-api/", env!("CARGO_PKG_VERSION")))
             .build()
-            .expect("reqwest client builds");
+            .expect("Failed to build HTTP client for TikTok API");
 
         Arc::new(Self {
             http,
-            auth_base_url: Url::parse(&cfg.auth_base_url).expect("auth_base_url parses"),
-            api_base_url: Url::parse(&cfg.api_base_url).expect("api_base_url parses"),
+            auth_base_url: Url::parse(&cfg.auth_base_url)
+                .expect("Invalid auth_base_url in TikTok config"),
+            api_base_url: Url::parse(&cfg.api_base_url)
+                .expect("Invalid api_base_url in TikTok config"),
             client_key: cfg.client_key.clone(),
             client_secret: cfg.client_secret.clone(),
         })
@@ -70,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn constructor_parses_urls() {
+    fn new_normalizes_api_base_url_with_trailing_slash() {
         let mut cfg = test_config();
         cfg.api_base_url = "http://127.0.0.1:9999".to_string();
 
@@ -81,7 +83,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn constructor_rejects_invalid_url() {
+    fn new_panics_on_invalid_api_base_url() {
         let mut cfg = test_config();
         cfg.api_base_url = "not a url".to_string();
 
