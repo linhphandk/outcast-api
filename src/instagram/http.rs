@@ -160,6 +160,14 @@ pub async fn instagram_callback(
             .map(|seconds| Utc::now() + Duration::seconds(seconds))
     });
 
+    // The Instagram API does not echo permissions in the token response;
+    // fall back to the requested scope so the stored value is meaningful.
+    let scopes = if short.permissions.is_empty() {
+        crate::instagram::client::SCOPE_IG_BUSINESS_BASIC
+    } else {
+        &short.permissions
+    };
+
     if let Err(err) = instagram_service
         .upsert_oauth_token(
             profile_id,
@@ -168,7 +176,7 @@ pub async fn instagram_callback(
             None,
             expires_at,
             &short.user_id,
-            &short.permissions,
+            scopes,
         )
         .await
     {

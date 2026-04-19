@@ -39,14 +39,21 @@ pub struct CodeExchange {
 /// Short-lived token returned by `POST /oauth/access_token` on the
 /// Instagram API with Instagram Login flow.
 ///
-/// The response body is `{"access_token":"…","user_id":…}` (plus an
-/// optional `permissions` field).  `user_id` is numeric but we keep it
-/// as a string for consistency with the rest of the codebase.
+/// The response body is `{"access_token":"…","user_id":…}`.  `user_id`
+/// is numeric but we keep it as a string for consistency with the rest
+/// of the codebase.
+///
+/// The `permissions` field is **not** present in the current Instagram
+/// API response (as of 2025).  It defaults to an empty string when
+/// absent; callers that need a scope value should fall back to
+/// [`SCOPE_IG_BUSINESS_BASIC`].
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
 pub struct ShortLivedToken {
     pub access_token: String,
     #[serde(deserialize_with = "deserialize_user_id")]
     pub user_id: String,
+    /// Granted permissions, if returned by the API.  Typically empty —
+    /// the API does not echo permissions in the token response.
     #[serde(default)]
     pub permissions: String,
 }
