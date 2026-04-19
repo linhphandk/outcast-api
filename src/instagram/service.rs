@@ -2,10 +2,10 @@ use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::{Span, debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::instagram::client::{CodeExchange, IgClient};
+use crate::instagram::client::{CodeExchange, IgClient, ShortLivedToken};
 use crate::instagram::error::IgError;
 use crate::instagram::repository::{
     OAuthToken, OAuthTokenRepository, OAuthTokenRepositoryError, OAuthTokenRepositoryTrait,
@@ -64,7 +64,7 @@ impl InstagramService {
     }
 
     #[instrument(skip_all)]
-    pub async fn exchange_code(&self, code: &str) -> Result<CodeExchange, IgError> {
+    pub async fn exchange_code(&self, code: &str) -> Result<ShortLivedToken, IgError> {
         info!("Exchanging Instagram OAuth code for short-lived token");
         let result = self.client.exchange_code(code).await;
         match &result {
@@ -134,7 +134,7 @@ impl InstagramService {
         result
     }
 
-    #[tracing::instrument(skip(self), fields(profile_id = %profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self), fields(profile_id = %profile_id))]
     pub async fn sync_profile(&self, profile_id: Uuid) -> Result<SocialHandle, InstagramSyncError> {
         let started_at = Instant::now();
         let oauth_token = self
@@ -181,18 +181,9 @@ impl InstagramService {
             )
             .await?;
 
-        let ig_user_id = self
-            .client
-            .fetch_business_account(&persisted_token.access_token)
-            .await
-            .map_err(|error| {
-                log_sync_ig_error(&error);
-                InstagramSyncError::Instagram(error)
-            })?;
-        Span::current().record("ig_user_id", tracing::field::display(&ig_user_id));
         let profile_stats = self
             .client
-            .fetch_profile_stats(&persisted_token.access_token, &ig_user_id)
+            .fetch_profile_stats(&persisted_token.access_token)
             .await
             .map_err(|error| {
                 log_sync_ig_error(&error);
@@ -200,7 +191,7 @@ impl InstagramService {
             })?;
         let recent_media = self
             .client
-            .fetch_recent_media(&persisted_token.access_token, &ig_user_id, 25)
+            .fetch_recent_media(&persisted_token.access_token, 25)
             .await
             .map_err(|error| {
                 log_sync_ig_error(&error);
@@ -337,11 +328,10 @@ mod tests {
     async fn exchange_code_success_returns_token() {
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path_regex("/v25.0/oauth/access_token"))
-            .and(query_param("code", "auth-code-123"))
+        Mock::given(method("POST"))
+            .and(path_regex("/oauth/access_token"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                r#"{"access_token":"short-token","token_type":"bearer"}"#,
+                r#"{"access_token":"short-token","user_id":17841400000000001}"#,
                 "application/json",
             ))
             .mount(&mock_server)
@@ -352,15 +342,15 @@ mod tests {
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
         let token = result.unwrap();
         assert_eq!(token.access_token, "short-token");
-        assert_eq!(token.token_type, "bearer");
+        assert_eq!(token.user_id, "17841400000000001");
     }
 
     #[tokio::test]
     async fn exchange_code_api_error_returns_err() {
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path_regex("/v25.0/oauth/access_token"))
+        Mock::given(method("POST"))
+            .and(path_regex("/oauth/access_token"))
             .respond_with(ResponseTemplate::new(401))
             .mount(&mock_server)
             .await;

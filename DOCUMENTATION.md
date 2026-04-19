@@ -1122,16 +1122,17 @@ When testing the `UserService`, we don't want to need a real database. Instead, 
 
 The application reads its configuration from environment variables. The separator for nested values is `__` (double underscore).
 
-### Instagram OAuth Setup (Meta App)
+### Instagram OAuth Setup (Instagram API with Instagram Login)
 
 1. Go to [Meta for Developers](https://developers.facebook.com/) and create an app.
-2. Add the Instagram product you need (for example, Instagram Basic Display).
+2. Add the **Instagram** product and configure **Instagram Login**.
 3. Configure the OAuth callback URL to match your backend callback endpoint.
 4. Copy these values to your environment:
-   - `INSTAGRAM__CLIENT_ID` (Meta App ID / Client ID)
-   - `INSTAGRAM__CLIENT_SECRET` (Meta App Secret / Client Secret)
+   - `INSTAGRAM__CLIENT_ID` (Instagram App ID — **not** the Facebook App ID)
+   - `INSTAGRAM__CLIENT_SECRET` (Instagram App Secret)
    - `INSTAGRAM__REDIRECT_URI` (OAuth callback URL)
    - `INSTAGRAM__GRAPH_API_VERSION` (optional, defaults to `v25.0`)
+5. The OAuth scope used is `instagram_business_basic`.
 
 | Variable | Description | Example Value |
 |---|---|---|
@@ -1144,9 +1145,9 @@ The application reads its configuration from environment variables. The separato
 | `DATABASE_URL` | Full PostgreSQL connection string (used by Diesel) | `postgres://postgres:example@localhost:5432/postgres` |
 | `PASSWORD_PEPPER` | Secret key used to pepper passwords before hashing | (A long random string) |
 | `JWT_SECRET` | Secret key used to sign JWT tokens | (A long random string) |
-| `INSTAGRAM__CLIENT_ID` | Instagram OAuth client ID from Meta app | `1234567890` |
-| `INSTAGRAM__CLIENT_SECRET` | Instagram OAuth client secret from Meta app | (Meta app secret) |
-| `INSTAGRAM__REDIRECT_URI` | Instagram OAuth callback URL configured in Meta app | `http://localhost:3000/oauth/instagram/callback` |
+| `INSTAGRAM__CLIENT_ID` | Instagram App ID (uses Instagram Login, not Facebook App ID) | `1234567890` |
+| `INSTAGRAM__CLIENT_SECRET` | Instagram App Secret | (Instagram app secret) |
+| `INSTAGRAM__REDIRECT_URI` | Instagram OAuth callback URL | `http://localhost:3000/oauth/instagram/callback` |
 | `INSTAGRAM__GRAPH_API_VERSION` | Instagram Graph API version | `v25.0` |
 
 > **Security note:** `PASSWORD_PEPPER` and `JWT_SECRET` are extremely sensitive. If someone obtains the `JWT_SECRET`, they can create fake tokens and impersonate any user. If someone obtains the `PASSWORD_PEPPER`, they can attempt to crack password hashes from the database. Never commit these values to version control.

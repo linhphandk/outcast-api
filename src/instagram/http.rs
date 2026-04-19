@@ -24,8 +24,6 @@ use crate::user::repository::profile_repository::{
 };
 
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
-const EMPTY_PROVIDER_USER_ID: &str = "";
-const EMPTY_SCOPES: &str = "";
 const INSTAGRAM_REFRESH_COOLDOWN: Duration = Duration::minutes(5);
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -162,6 +160,14 @@ pub async fn instagram_callback(
             .map(|seconds| Utc::now() + Duration::seconds(seconds))
     });
 
+    // The Instagram API does not echo permissions in the token response;
+    // fall back to the requested scope so the stored value is meaningful.
+    let scopes = if short.permissions.is_empty() {
+        crate::instagram::client::SCOPE_IG_BUSINESS_BASIC
+    } else {
+        &short.permissions
+    };
+
     if let Err(err) = instagram_service
         .upsert_oauth_token(
             profile_id,
@@ -169,8 +175,8 @@ pub async fn instagram_callback(
             &long.access_token,
             None,
             expires_at,
-            EMPTY_PROVIDER_USER_ID,
-            EMPTY_SCOPES,
+            &short.user_id,
+            scopes,
         )
         .await
     {

@@ -35,9 +35,9 @@ The project follows **Hexagonal Architecture** (Ports and Adapters) to ensure bu
 │   │   └── usecase/       # session_service (create, refresh, logout, list, delete)
 │   └── instagram/         # Instagram OAuth integration
 │       ├── mod.rs
-│       ├── client.rs      # IgClient — HTTP calls to Facebook/Instagram Graph API
+│       ├── client.rs      # IgClient — HTTP calls to Instagram API (Instagram Login flow)
 │       ├── error.rs       # IgError (unauthorized, rate-limited, graph, transport, parse)
-│       ├── http.rs        # OAuth HTTP handlers (authorize, callback, disconnect)
+│       ├── http.rs        # OAuth HTTP handlers (authorize, callback, disconnect, refresh)
 │       ├── repository.rs  # OAuthTokenRepository (Diesel, upsert/delete)
 │       ├── service.rs     # InstagramService — coordinates client + repository
 │       └── state.rs       # OAuth CSRF state cookie (issue + verify via JWT)
@@ -220,8 +220,8 @@ Environment variables (using `__` as separator):
 | `DATABASE_URL` | Diesel database URL |
 | `PASSWORD_PEPPER` | Secret pepper for password hashing |
 | `JWT_SECRET` | Secret key for JWT signing (HS256) |
-| `INSTAGRAM__CLIENT_ID` | Instagram / Facebook app client ID |
-| `INSTAGRAM__CLIENT_SECRET` | Instagram / Facebook app client secret |
+| `INSTAGRAM__CLIENT_ID` | Instagram App ID (not Facebook App ID — uses Instagram Login) |
+| `INSTAGRAM__CLIENT_SECRET` | Instagram App Secret |
 | `INSTAGRAM__REDIRECT_URI` | OAuth redirect URI |
 | `INSTAGRAM__GRAPH_API_VERSION` | Graph API version (default: `v25.0`) |
 | `TIKTOK__CLIENT_KEY` | TikTok app client key |
@@ -277,10 +277,10 @@ Environment variables (using `__` as separator):
 | `GET` | `/auth/sessions` | Bearer | List active sessions |
 | `DELETE` | `/auth/sessions/:id` | Bearer | Delete a specific session |
 
-### Instagram OAuth
+### Instagram OAuth (Instagram API with Instagram Login)
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/oauth/instagram` | Bearer | Start Instagram OAuth flow (redirects to Facebook) |
+| `GET` | `/oauth/instagram` | Bearer | Start Instagram OAuth flow (redirects to Instagram) |
 | `GET` | `/oauth/instagram/callback` | State cookie | OAuth callback — exchanges code, persists token |
 | `DELETE` | `/oauth/instagram` | Bearer | Disconnect Instagram (deletes token, resets social handle stats) |
 
@@ -348,5 +348,6 @@ cargo test
 - Use `mockall` (`#[automock]`) on repository/service traits to enable unit testing
 - Keep controllers thin — business logic belongs in `usecase/`
 - Integration tests use `testcontainers` — no external DB or S3 required
-- New Instagram Graph API calls belong in `IgClient` (`src/instagram/client.rs`); `InstagramService` only orchestrates
+- New Instagram API calls belong in `IgClient` (`src/instagram/client.rs`); `InstagramService` only orchestrates
+- Instagram OAuth uses the "Instagram API with Instagram Login" flow; scope is `instagram_business_basic`
 - Session validation on every authenticated request hits the DB — keep session lookups fast
