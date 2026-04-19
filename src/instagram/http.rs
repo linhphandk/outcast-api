@@ -25,6 +25,7 @@ use crate::user::repository::profile_repository::{
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
 const EMPTY_PROVIDER_USER_ID: &str = "";
 const EMPTY_SCOPES: &str = "";
+const INSTAGRAM_REFRESH_COOLDOWN: Duration = Duration::minutes(5);
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct InstagramCallbackQuery {
@@ -259,6 +260,45 @@ pub async fn refresh_instagram(
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to resolve profile").into_response();
         }
     };
+
+    match profile_repo
+        .find_social_handle_last_synced_at_by_platform(profile_id, "instagram")
+        .await
+    {
+        Ok(Some(last_synced_at)) => {
+            let elapsed = Utc::now().signed_duration_since(last_synced_at);
+            if elapsed < INSTAGRAM_REFRESH_COOLDOWN {
+                let retry_after_seconds = (INSTAGRAM_REFRESH_COOLDOWN - elapsed)
+                    .num_seconds()
+                    .clamp(1, INSTAGRAM_REFRESH_COOLDOWN.num_seconds());
+
+                warn!(
+                    profile_id = %profile_id,
+                    retry_after_seconds,
+                    "Instagram refresh blocked by profile cooldown"
+                );
+
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(
+                        axum::http::header::RETRY_AFTER,
+                        retry_after_seconds.to_string(),
+                    )],
+                    "Instagram refresh cooldown active",
+                )
+                    .into_response();
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            error!(error = %err, profile_id = %profile_id, "Failed to read Instagram refresh cooldown state");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to resolve Instagram refresh cooldown",
+            )
+                .into_response();
+        }
+    }
 
     match instagram_service.sync_profile(profile_id).await {
         Ok(social_handle) => (

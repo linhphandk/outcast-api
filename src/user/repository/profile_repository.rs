@@ -245,6 +245,40 @@ impl ProfileRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
     }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, platform = %platform))]
+    pub async fn find_social_handle_last_synced_at_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<Option<DateTime<Utc>>, ProfileRepositoryError> {
+        debug!("Finding social handle last_synced_at by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+
+        conn.interact(move |conn| {
+            social_handles::table
+                .filter(social_handles::profile_id.eq(profile_id))
+                .filter(social_handles::platform.eq(platform))
+                .select(social_handles::last_synced_at)
+                .first::<Option<DateTime<Utc>>>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error finding social handle sync timestamp");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error finding social handle sync timestamp");
+            ProfileRepositoryError::DieselError(e)
+        })
+        .map(|value| value.flatten())
+    }
 }
 
 #[async_trait]
