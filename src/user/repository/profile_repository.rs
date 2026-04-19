@@ -229,6 +229,17 @@ pub trait ProfileRepositoryTrait {
         platform: &str,
     ) -> Result<(), ProfileRepositoryError>;
 
+    /// Clears `last_synced_at` to NULL for the social handle identified by
+    /// `(profile_id, platform)`.  Call this when an upstream OAuth token is
+    /// revoked or expires beyond recovery so that the cached sync state is
+    /// invalidated and the user is prompted to reconnect.  The username/handle
+    /// fields are left intact so callers can still display the last-known data.
+    async fn clear_social_handle_last_synced_at_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError>;
+
     async fn upsert_social_handle_sync_by_platform(
         &self,
         profile_id: Uuid,
@@ -796,6 +807,45 @@ impl ProfileRepositoryTrait for ProfileRepository {
         })?
         .map_err(|e| {
             error!(error = %e, "Diesel error during social handle reset");
+            ProfileRepositoryError::DieselError(e)
+        })?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(profile_id = %profile_id, platform = %platform))]
+    async fn clear_social_handle_last_synced_at_by_platform(
+        &self,
+        profile_id: Uuid,
+        platform: &str,
+    ) -> Result<(), ProfileRepositoryError> {
+        debug!("Clearing social handle last_synced_at by platform");
+        let conn = self.pool.get().await.map_err(|e| {
+            error!(error = %e, "Failed to acquire database connection");
+            ProfileRepositoryError::PoolError(e)
+        })?;
+
+        let platform = platform.to_string();
+
+        conn.interact(move |conn| {
+            diesel::update(
+                social_handles::table
+                    .filter(social_handles::profile_id.eq(profile_id))
+                    .filter(social_handles::platform.eq(platform)),
+            )
+            .set((
+                social_handles::last_synced_at.eq(None::<DateTime<Utc>>),
+                social_handles::updated_at.eq(Some(Utc::now())),
+            ))
+            .execute(conn)
+        })
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Interact error during social handle last_synced_at clear");
+            ProfileRepositoryError::InteractError(e)
+        })?
+        .map_err(|e| {
+            error!(error = %e, "Diesel error during social handle last_synced_at clear");
             ProfileRepositoryError::DieselError(e)
         })?;
 
