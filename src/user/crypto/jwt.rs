@@ -126,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn test_expiry_is_15_minutes() {
+    fn test_expiry_is_120_minutes() {
         let user_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
 
@@ -136,8 +136,8 @@ mod tests {
         let after = Utc::now().timestamp() as usize;
 
         let claims = verify_jwt(&token, SECRET).expect("JWT verification failed");
-        let expected_min = before + 15 * 60;
-        let expected_max = after + 15 * 60;
+        let expected_min = before + 120 * 60;
+        let expected_max = after + 120 * 60;
 
         assert!(
             claims.exp >= expected_min && claims.exp <= expected_max,
