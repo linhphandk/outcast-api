@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Client as HttpClient;
+use reqwest::{Client as HttpClient, Response};
+use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::config::TikTokConfig;
+use crate::tiktok::error::TikTokError;
 
 #[derive(Clone)]
 pub struct TikTokClient {
@@ -53,6 +55,19 @@ impl TikTokClient {
     pub(crate) fn http(&self) -> &HttpClient {
         &self.http
     }
+}
+
+pub(crate) async fn parse_response<T: DeserializeOwned>(
+    response: Response,
+) -> Result<T, TikTokError> {
+    let status = response.status();
+    let body = response.text().await?;
+
+    if status.is_success() {
+        return Ok(serde_json::from_str::<T>(&body)?);
+    }
+
+    Err(TikTokError::from_response_parts(status, body))
 }
 
 #[cfg(test)]
