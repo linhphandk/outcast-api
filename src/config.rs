@@ -263,4 +263,68 @@ mod tests {
         assert_eq!(config.tiktok.api_base_url, "https://open.tiktokapis.com");
         assert_eq!(config.tiktok.auth_base_url, "https://www.tiktok.com");
     }
+
+    #[test]
+    fn loads_tiktok_section_with_optional_defaults() {
+        let _lock = env_lock().lock().expect("env mutex poisoned");
+        let _guard = EnvGuard::snapshot(&[
+            LISTEN,
+            DATABASE_URL,
+            PASSWORD_PEPPER,
+            JWT_SECRET,
+            PG_HOST,
+            PG_PORT,
+            PG_USER,
+            PG_PASSWORD,
+            PG_DBNAME,
+            INSTAGRAM_CLIENT_ID,
+            INSTAGRAM_CLIENT_SECRET,
+            INSTAGRAM_REDIRECT_URI,
+            INSTAGRAM_GRAPH_API_VERSION,
+            TIKTOK_CLIENT_KEY,
+            TIKTOK_CLIENT_SECRET,
+            TIKTOK_REDIRECT_URI,
+            TIKTOK_SCOPES,
+            TIKTOK_API_BASE_URL,
+            TIKTOK_AUTH_BASE_URL,
+            S3_BUCKET,
+            S3_REGION,
+        ]);
+
+        unsafe {
+            std::env::set_var(LISTEN, "0.0.0.0:3000");
+            std::env::set_var(DATABASE_URL, "postgres://postgres:example@localhost:5432/postgres");
+            std::env::set_var(PASSWORD_PEPPER, "pepper");
+            std::env::set_var(JWT_SECRET, "jwt-secret");
+            std::env::set_var(PG_HOST, "localhost");
+            std::env::set_var(PG_PORT, "5432");
+            std::env::set_var(PG_USER, "postgres");
+            std::env::set_var(PG_PASSWORD, "example");
+            std::env::set_var(PG_DBNAME, "postgres");
+            std::env::set_var(INSTAGRAM_CLIENT_ID, "ig-client-id");
+            std::env::set_var(INSTAGRAM_CLIENT_SECRET, "ig-client-secret");
+            std::env::set_var(
+                INSTAGRAM_REDIRECT_URI,
+                "http://localhost:3000/oauth/instagram/callback",
+            );
+            std::env::remove_var(INSTAGRAM_GRAPH_API_VERSION);
+            std::env::set_var(TIKTOK_CLIENT_KEY, "tt-client-key");
+            std::env::set_var(TIKTOK_CLIENT_SECRET, "tt-client-secret");
+            std::env::set_var(TIKTOK_REDIRECT_URI, "http://localhost:3000/oauth/tiktok/callback");
+            std::env::remove_var(TIKTOK_SCOPES);
+            std::env::remove_var(TIKTOK_API_BASE_URL);
+            std::env::remove_var(TIKTOK_AUTH_BASE_URL);
+            std::env::set_var(S3_BUCKET, "outcast-uploads");
+            std::env::set_var(S3_REGION, "eu-north-1");
+        }
+
+        let config = AppConfig::from_env().expect("app config should load");
+
+        assert_eq!(
+            config.tiktok.scopes,
+            "user.info.basic,user.info.profile,user.info.stats"
+        );
+        assert_eq!(config.tiktok.api_base_url, "https://open.tiktokapis.com");
+        assert_eq!(config.tiktok.auth_base_url, "https://www.tiktok.com");
+    }
 }
