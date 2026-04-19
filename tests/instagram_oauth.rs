@@ -314,17 +314,6 @@ async fn instagram_refresh_within_cooldown_returns_429_with_retry_after() {
         .unwrap();
 
     profile_repo
-        .add_social_handle(
-            profile.id,
-            "instagram".to_string(),
-            "ig_refresh_user".to_string(),
-            "https://instagram.com/ig_refresh_user".to_string(),
-            123,
-        )
-        .await
-        .unwrap();
-
-    profile_repo
         .upsert_social_handle_sync_by_platform(
             profile.id,
             "instagram",
@@ -355,5 +344,5 @@ async fn instagram_refresh_within_cooldown_returns_429_with_retry_after() {
         .unwrap()
         .parse::<i64>()
         .unwrap();
-    assert!((1..=300).contains(&retry_after));
+    assert!((299..=300).contains(&retry_after));
 }
