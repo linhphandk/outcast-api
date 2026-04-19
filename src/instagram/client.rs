@@ -26,6 +26,10 @@ pub struct IgClient {
     instagram_graph_base_url: String,
 }
 
+/// Wrapper for token values that must never be emitted raw in logs.
+///
+/// Use this in structured logging fields whenever access tokens might be
+/// attached to diagnostics.
 pub struct RedactedToken<'a>(pub &'a str);
 
 impl std::fmt::Debug for RedactedToken<'_> {

@@ -225,7 +225,8 @@ impl InstagramService {
             .as_ref()
             .ok_or(InstagramSyncError::ServiceMisconfigured)?;
 
-        let followers_count_delta = follower_count - existing_followers;
+        let followers_count_delta = i64::from(follower_count) - i64::from(existing_followers);
+        let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let social_handle = profile_repository
             .upsert_social_handle_sync_by_platform(
                 profile_id,
@@ -240,7 +241,7 @@ impl InstagramService {
             .map_err(InstagramSyncError::from)?;
 
         info!(
-            duration_ms = started_at.elapsed().as_millis(),
+            duration_ms,
             followers_count_delta,
             engagement_rate = recent_media.engagement_rate,
             "Instagram profile sync completed",
@@ -250,6 +251,10 @@ impl InstagramService {
     }
 }
 
+/// Service-level Instagram sync error logging without token context.
+///
+/// `IgClient` emits token-aware diagnostics with redacted token fields; this
+/// helper is only used where token context is unavailable in the service layer.
 fn log_sync_ig_error(error: &IgError) {
     match error {
         IgError::RateLimited { retry_after } => warn!(
