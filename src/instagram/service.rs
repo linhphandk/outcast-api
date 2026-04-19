@@ -1,8 +1,8 @@
-use chrono::{DateTime, Utc};
 use bigdecimal::BigDecimal;
+use chrono::{DateTime, Utc};
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::{debug, error, info, instrument, warn, Span};
+use tracing::{Span, debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::instagram::client::{CodeExchange, IgClient};
@@ -79,7 +79,9 @@ impl InstagramService {
         info!("Exchanging Instagram short-lived token for long-lived token");
         let result = self.client.exchange_for_long_lived(short).await;
         match &result {
-            Ok(token) => debug!(expires_in = ?token.expires_in, "Long-lived token exchange successful"),
+            Ok(token) => {
+                debug!(expires_in = ?token.expires_in, "Long-lived token exchange successful")
+            }
             Err(error) => log_sync_ig_error(error),
         }
         result
@@ -132,7 +134,7 @@ impl InstagramService {
         result
     }
 
-    #[instrument(skip(self), fields(profile_id = %profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self), fields(profile_id = %profile_id, ig_user_id))]
     pub async fn sync_profile(&self, profile_id: Uuid) -> Result<SocialHandle, InstagramSyncError> {
         let started_at = Instant::now();
         let oauth_token = self
@@ -259,10 +261,7 @@ fn log_sync_ig_error(error: &IgError) {
             graph_subcode = *subcode,
             "Instagram sync Graph API failure",
         ),
-        IgError::Http { status, .. } => error!(
-            status = *status,
-            "Instagram sync HTTP failure",
-        ),
+        IgError::Http { status, .. } => error!(status = *status, "Instagram sync HTTP failure",),
         _ => warn!("Instagram sync failed"),
     }
 }
@@ -336,12 +335,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex("/v19.0/oauth/access_token"))
             .and(query_param("code", "auth-code-123"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(
-                    r#"{"access_token":"short-token","token_type":"bearer"}"#,
-                    "application/json",
-                ),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"short-token","token_type":"bearer"}"#,
+                "application/json",
+            ))
             .mount(&mock_server)
             .await;
 
@@ -378,12 +375,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex("/access_token"))
             .and(query_param("grant_type", "ig_exchange_token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(
-                    r#"{"access_token":"long-token","token_type":"bearer","expires_in":5183944}"#,
-                    "application/json",
-                ),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"long-token","token_type":"bearer","expires_in":5183944}"#,
+                "application/json",
+            ))
             .mount(&mock_server)
             .await;
 
@@ -554,6 +549,9 @@ mod tests {
         // No token inserted — delete should return false.
         let deleted = service.delete_oauth_token(profile_id, "instagram").await;
         assert!(deleted.is_ok());
-        assert!(!deleted.unwrap(), "should return false when no token present");
+        assert!(
+            !deleted.unwrap(),
+            "should return false when no token present"
+        );
     }
 }

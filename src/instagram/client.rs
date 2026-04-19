@@ -1,7 +1,7 @@
-use std::time::Duration;
 use crate::config::InstagramConfig;
 use crate::instagram::error::IgError;
-use tracing::{error, instrument, warn};
+use std::time::Duration;
+use tracing::{error, warn};
 
 const FACEBOOK_OAUTH_HOST: &str = "www.facebook.com";
 const FACEBOOK_GRAPH_HOST: &str = "graph.facebook.com";
@@ -164,7 +164,7 @@ impl IgClient {
         url.to_string()
     }
 
-    #[instrument(skip(code), fields(profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self, code), fields(profile_id, ig_user_id))]
     pub async fn exchange_code(&self, code: &str) -> Result<CodeExchange, IgError> {
         let res = self.http.get(self.build_exchange_url(code)).send().await?;
         if !res.status().is_success() {
@@ -178,7 +178,7 @@ impl IgClient {
         Ok(serde_json::from_str(&body)?)
     }
 
-    #[instrument(skip(token), fields(profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     pub async fn exchange_for_long_lived(&self, token: &str) -> Result<CodeExchange, IgError> {
         let res = self
             .http
@@ -198,7 +198,7 @@ impl IgClient {
         Ok(serde_json::from_str(&body)?)
     }
 
-    #[instrument(skip(token), fields(profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     pub async fn refresh_long_lived_token(&self, token: &str) -> Result<CodeExchange, IgError> {
         let res = self
             .http
@@ -269,7 +269,7 @@ impl IgClient {
     /// returned, queries `GET /{page_id}?fields=instagram_business_account`.
     /// Returns the first connected IG Business Account ID found, or
     /// `IgError::NoBusinessAccount` when none of the pages have one.
-    #[instrument(skip(token), fields(profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     pub async fn fetch_business_account(&self, token: &str) -> Result<String, IgError> {
         let mut next_url: Option<String> = Some(self.build_pages_url(token).to_string());
 
@@ -307,8 +307,7 @@ impl IgClient {
         ))
         .expect("BUG: Failed to construct Facebook Graph pages URL");
 
-        url.query_pairs_mut()
-            .append_pair("access_token", token);
+        url.query_pairs_mut().append_pair("access_token", token);
         url
     }
 
@@ -328,7 +327,7 @@ impl IgClient {
     }
 
     /// Query a single Facebook Page for its connected IG Business Account.
-    #[instrument(skip(token), fields(profile_id, ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id))]
     async fn fetch_page_ig_account(
         &self,
         token: &str,
@@ -360,7 +359,7 @@ impl IgClient {
     /// Calls `GET /{ig_user_id}?fields=username,name,biography,
     /// followers_count,follows_count,media_count,profile_picture_url,website`
     /// on the Facebook Graph API.
-    #[instrument(skip(token), fields(profile_id, ig_user_id = %ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id = %ig_user_id))]
     pub async fn fetch_profile_stats(
         &self,
         token: &str,
@@ -411,7 +410,7 @@ impl IgClient {
     ///
     /// The returned [`RecentMediaSummary`] contains the raw items together with
     /// pre-computed totals and an average engagement rate per post.
-    #[instrument(skip(token), fields(profile_id, ig_user_id = %ig_user_id))]
+    #[tracing::instrument(skip(self, token), fields(profile_id, ig_user_id = %ig_user_id))]
     pub async fn fetch_recent_media(
         &self,
         token: &str,
@@ -420,7 +419,10 @@ impl IgClient {
     ) -> Result<RecentMediaSummary, IgError> {
         let res = self
             .http
-            .get(self.build_recent_media_url(token, ig_user_id, limit).to_string())
+            .get(
+                self.build_recent_media_url(token, ig_user_id, limit)
+                    .to_string(),
+            )
             .send()
             .await?;
 
@@ -453,12 +455,7 @@ impl IgClient {
         })
     }
 
-    fn build_recent_media_url(
-        &self,
-        token: &str,
-        ig_user_id: &str,
-        limit: u32,
-    ) -> url::Url {
+    fn build_recent_media_url(&self, token: &str, ig_user_id: &str, limit: u32) -> url::Url {
         let mut url = url::Url::parse(&format!(
             "{}/{}/{}/media",
             self.facebook_graph_base_url.trim_end_matches('/'),
@@ -516,9 +513,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse,
-        PagesResponse, ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT,
-        SCOPE_INSTAGRAM_BASIC, SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
+        CodeExchange, IgBusinessAccountResponse, IgClient, MediaItem, MediaResponse, PagesResponse,
+        ProfileStats, RecentMediaSummary, SCOPE_BUSINESS_MANAGEMENT, SCOPE_INSTAGRAM_BASIC,
+        SCOPE_INSTAGRAM_MANAGE_INSIGHTS, SCOPE_PAGES_SHOW_LIST,
     };
     use crate::config::InstagramConfig;
 
@@ -676,10 +673,7 @@ mod tests {
             query.get("fields"),
             Some(&"instagram_business_account".to_string())
         );
-        assert_eq!(
-            query.get("access_token"),
-            Some(&"my-token".to_string())
-        );
+        assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
     }
 
     #[test]
@@ -746,10 +740,7 @@ mod tests {
             query.get("fields"),
             Some(&"username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website".to_string())
         );
-        assert_eq!(
-            query.get("access_token"),
-            Some(&"my-token".to_string())
-        );
+        assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
     }
 
     #[test]
@@ -842,7 +833,10 @@ mod tests {
         assert_eq!(parsed.data[0].id, "media1");
         assert_eq!(parsed.data[0].like_count, Some(100));
         assert_eq!(parsed.data[0].comments_count, Some(10));
-        assert_eq!(parsed.data[0].timestamp.as_deref(), Some("2026-04-01T12:00:00+0000"));
+        assert_eq!(
+            parsed.data[0].timestamp.as_deref(),
+            Some("2026-04-01T12:00:00+0000")
+        );
         assert_eq!(parsed.data[0].media_type.as_deref(), Some("IMAGE"));
         assert_eq!(parsed.data[1].id, "media2");
         assert_eq!(parsed.data[1].like_count, Some(200));
