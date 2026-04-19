@@ -308,7 +308,7 @@ pub async fn refresh_instagram(
         )
             .into_response(),
         Err(InstagramSyncError::Instagram(IgError::Unauthorized)) => {
-            warn!(profile_id = %profile_id, "Instagram token unauthorized — deleting token and clearing sync timestamp");
+            warn!(profile_id = %profile_id, "Instagram token unauthorized: deleting token and clearing sync timestamp");
             if let Err(err) = instagram_service.delete_oauth_token(profile_id, "instagram").await {
                 error!(error = %err, profile_id = %profile_id, "Failed to delete Instagram OAuth token after 401");
             }

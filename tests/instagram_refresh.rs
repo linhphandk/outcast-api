@@ -170,7 +170,7 @@ async fn create_user(app: &Router, email: &str) -> CreateUserRes {
     serde_json::from_slice::<CreateUserRes>(&body).unwrap()
 }
 
-async fn oauth_token_count(pool: &deadpool_diesel::postgres::Pool, profile_id: uuid::Uuid) -> i64 {
+async fn instagram_oauth_token_count(pool: &deadpool_diesel::postgres::Pool, profile_id: uuid::Uuid) -> i64 {
     let conn = pool.get().await.unwrap();
     conn.interact(move |conn| {
         oauth_tokens::table
@@ -203,7 +203,7 @@ async fn social_handle_last_synced_at(
     .flatten()
 }
 
-fn mount_refresh_success_mocks<'a>(
+fn mount_instagram_refresh_success_mocks<'a>(
     mock_server: &'a MockServer,
     access_token: &'a str,
     refreshed_token: &'a str,
@@ -321,7 +321,7 @@ async fn instagram_refresh_on_graph_401_cleans_up_token_and_returns_reauth_requi
         .unwrap();
 
     // --- First refresh: mock all Graph API endpoints to succeed ---
-    mount_refresh_success_mocks(&mock_server, "long-lived-token", "refreshed-token").await;
+    mount_instagram_refresh_success_mocks(&mock_server, "long-lived-token", "refreshed-token").await;
 
     let first_refresh = Request::builder()
         .method("POST")
@@ -341,7 +341,7 @@ async fn instagram_refresh_on_graph_401_cleans_up_token_and_returns_reauth_requi
     );
 
     // oauth_tokens row should still exist with the refreshed token
-    assert_eq!(oauth_token_count(&pool, profile.id).await, 1);
+    assert_eq!(instagram_oauth_token_count(&pool, profile.id).await, 1);
 
     // Reset last_synced_at to a past timestamp to bypass cooldown for the second call
     let conn = pool.get().await.unwrap();
@@ -397,7 +397,7 @@ async fn instagram_refresh_on_graph_401_cleans_up_token_and_returns_reauth_requi
 
     // oauth_tokens row should be deleted
     assert_eq!(
-        oauth_token_count(&pool, profile.id).await,
+        instagram_oauth_token_count(&pool, profile.id).await,
         0,
         "oauth_tokens row should be deleted on upstream 401"
     );
