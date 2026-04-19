@@ -9,6 +9,7 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tracing::{error, info, instrument, warn};
 
 use crate::instagram::{
@@ -307,7 +308,21 @@ pub async fn refresh_instagram(
         )
             .into_response(),
         Err(InstagramSyncError::Instagram(IgError::Unauthorized)) => {
-            (StatusCode::UNAUTHORIZED, "Instagram account unauthorized").into_response()
+            warn!(profile_id = %profile_id, "Instagram token unauthorized — deleting token and clearing sync timestamp");
+            if let Err(err) = instagram_service.delete_oauth_token(profile_id, "instagram").await {
+                error!(error = %err, profile_id = %profile_id, "Failed to delete Instagram OAuth token after 401");
+            }
+            if let Err(err) = profile_repo
+                .clear_social_handle_last_synced_at_by_platform(profile_id, "instagram")
+                .await
+            {
+                error!(error = %err, profile_id = %profile_id, "Failed to clear Instagram social handle last_synced_at after 401");
+            }
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "instagram_reauth_required"})),
+            )
+                .into_response()
         }
         Err(InstagramSyncError::Instagram(IgError::RateLimited { .. })) => {
             (StatusCode::TOO_MANY_REQUESTS, "Instagram rate limited").into_response()
