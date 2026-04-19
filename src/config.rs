@@ -25,15 +25,6 @@ pub struct S3Config {
     pub endpoint_url: Option<String>,
 }
 
-impl S3Config {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        ::config::Config::builder()
-            .add_source(::config::Environment::with_prefix("S3").prefix_separator("__"))
-            .build()?
-            .try_deserialize()
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct InstagramConfig {
     pub client_id: String,
@@ -67,15 +58,6 @@ pub struct TikTokConfig {
     pub auth_base_url: String,
 }
 
-impl TikTokConfig {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        ::config::Config::builder()
-            .add_source(::config::Environment::with_prefix("TIKTOK").prefix_separator("__"))
-            .build()?
-            .try_deserialize()
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     pub listen: String,
@@ -90,34 +72,10 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
-        #[derive(Debug, Deserialize)]
-        struct BaseAppConfig {
-            listen: String,
-            pg: PgConfig,
-            database_url: String,
-            password_pepper: String,
-            jwt_secret: String,
-        }
-
-        let base_config: BaseAppConfig = ::config::Config::builder()
+        ::config::Config::builder()
             .add_source(::config::Environment::default().separator("__"))
             .build()?
-            .try_deserialize()?;
-
-        let instagram = InstagramConfig::from_env()?;
-        let tiktok = TikTokConfig::from_env()?;
-        let s3 = S3Config::from_env()?;
-
-        Ok(Self {
-            listen: base_config.listen,
-            pg: base_config.pg,
-            database_url: base_config.database_url,
-            password_pepper: base_config.password_pepper,
-            jwt_secret: base_config.jwt_secret,
-            instagram,
-            tiktok,
-            s3,
-        })
+            .try_deserialize()
     }
 }
 
