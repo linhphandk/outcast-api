@@ -292,6 +292,94 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
 }
 
 #[tokio::test]
+async fn instagram_oauth_callback_user_denied_redirects_to_dashboard_with_denied_status() {
+    let (_container, pool) = setup_test_db().await;
+    let mock_server = MockServer::start().await;
+    let app = build_app(pool.clone(), &mock_server);
+    let created = create_user(&app, "ig_oauth_denied@example.com").await;
+
+    let profile_repo = ProfileRepository::new(pool.clone());
+    let profile = profile_repo
+        .create(
+            created.id,
+            "IG User".to_string(),
+            "Creator".to_string(),
+            "tech".to_string(),
+            "https://example.com/avatar.png".to_string(),
+            "ig_user_denied".to_string(),
+        )
+        .await
+        .unwrap();
+
+    let authorize_request = Request::builder()
+        .method("GET")
+        .uri("/oauth/instagram")
+        .header("Authorization", format!("Bearer {}", created.token))
+        .body(Body::empty())
+        .unwrap();
+    let authorize_response = app.clone().oneshot(authorize_request).await.unwrap();
+    assert_eq!(
+        authorize_response.status(),
+        axum::http::StatusCode::SEE_OTHER
+    );
+
+    let location = authorize_response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let callback_state = url::Url::parse(location)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.to_string())
+        .unwrap();
+    let oauth_cookie = authorize_response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let callback_request = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/oauth/instagram/callback?error=access_denied&error_reason=user_denied&error_description=Denied+by+user&state={callback_state}"
+        ))
+        .header(axum::http::header::COOKIE, oauth_cookie)
+        .body(Body::empty())
+        .unwrap();
+    let callback_response = app.clone().oneshot(callback_request).await.unwrap();
+    assert_eq!(
+        callback_response.status(),
+        axum::http::StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        callback_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap(),
+        "/dashboard?instagram=denied"
+    );
+
+    let cleared_cookie = callback_response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(cleared_cookie.contains("ig_oauth_state="));
+    assert!(cleared_cookie.contains("Max-Age=0"));
+
+    assert_eq!(oauth_token_count(&pool, profile.id).await, 0);
+}
+
+#[tokio::test]
 async fn instagram_refresh_within_cooldown_returns_429_with_retry_after() {
     let (_container, pool) = setup_test_db().await;
     let mock_server = MockServer::start().await;

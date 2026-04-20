@@ -6,8 +6,10 @@ use axum::{
     response::{IntoResponse, Redirect},
     routing::{get, post},
 };
+use axum_extra::extract::cookie::{Cookie, SameSite};
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
+use cookie::time::Duration as CookieDuration;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{error, info, instrument, warn};
@@ -24,12 +26,27 @@ use crate::user::repository::profile_repository::{
 };
 
 const DASHBOARD_REDIRECT_PATH: &str = "/dashboard";
+const DASHBOARD_REDIRECT_DENIED_PATH: &str = "/dashboard?instagram=denied";
 const INSTAGRAM_REFRESH_COOLDOWN: Duration = Duration::minutes(5);
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct InstagramCallbackQuery {
-    code: String,
+    code: Option<String>,
     state: String,
+    error: Option<String>,
+    error_reason: Option<String>,
+    error_description: Option<String>,
+}
+
+fn clear_oauth_state_cookie(jar: CookieJar) -> CookieJar {
+    let cookie = Cookie::build((OAUTH_STATE_COOKIE_NAME, ""))
+        .path("/oauth/instagram")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(!cfg!(debug_assertions))
+        .max_age(CookieDuration::seconds(0))
+        .build();
+    jar.add(cookie)
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -82,8 +99,11 @@ pub async fn instagram_authorize(
     get,
     path = "/oauth/instagram/callback",
     params(
-        ("code" = String, Query, description = "Authorization code returned by Instagram OAuth"),
-        ("state" = String, Query, description = "OAuth state returned by Instagram OAuth")
+        ("code" = Option<String>, Query, description = "Authorization code returned by Instagram OAuth"),
+        ("state" = String, Query, description = "OAuth state returned by Instagram OAuth"),
+        ("error" = Option<String>, Query, description = "OAuth error code returned by Instagram OAuth when consent is denied"),
+        ("error_reason" = Option<String>, Query, description = "OAuth error reason returned by Instagram OAuth when consent is denied"),
+        ("error_description" = Option<String>, Query, description = "OAuth error description returned by Instagram OAuth when consent is denied")
     ),
     responses(
         (status = 303, description = "Redirect back to dashboard after successful OAuth callback"),
@@ -118,6 +138,26 @@ pub async fn instagram_callback(
         }
     };
 
+    if let Some(error_code) = query.error.as_deref() {
+        let jar = clear_oauth_state_cookie(jar);
+        warn!(
+            user_id = %user_id,
+            error = error_code,
+            error_reason = query.error_reason.as_deref().unwrap_or_default(),
+            error_description = query.error_description.as_deref().unwrap_or_default(),
+            "Instagram OAuth callback denied by user"
+        );
+        return (jar, Redirect::to(DASHBOARD_REDIRECT_DENIED_PATH)).into_response();
+    }
+
+    let code = match query.code.as_deref() {
+        Some(code) => code,
+        None => {
+            warn!(user_id = %user_id, "Instagram OAuth callback missing both code and error");
+            return (StatusCode::BAD_REQUEST, "Malformed OAuth callback").into_response();
+        }
+    };
+
     let profile_id = match profile_repo.find_by_user_id(user_id).await {
         Ok(Some(profile)) => profile.id,
         Ok(None) => {
@@ -134,7 +174,7 @@ pub async fn instagram_callback(
         }
     };
 
-    let short = match instagram_service.exchange_code(&query.code).await {
+    let short = match instagram_service.exchange_code(code).await {
         Ok(token) => token,
         Err(err) => {
             error!(error = %err, "Failed to exchange Instagram OAuth code");
