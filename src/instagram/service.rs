@@ -154,23 +154,30 @@ impl InstagramService {
             .map(|handle| handle.follower_count)
             .unwrap_or(0);
 
-        let refreshed = self
-            .client
-            .refresh_long_lived_token(&oauth_token.access_token)
-            .await
-            .map_err(|error| {
-                log_sync_ig_error(&error);
-                InstagramSyncError::Instagram(error)
-            })?;
+        let should_refresh = oauth_token
+            .expires_at
+            .map(|expires_at| {
+                expires_at.signed_duration_since(Utc::now()) < chrono::Duration::days(7)
+            })
+            .unwrap_or(true);
 
-        let expires_at = refreshed.expires_in.and_then(|seconds| {
-            i64::try_from(seconds)
-                .ok()
-                .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds))
-        });
+        let effective_access_token = if should_refresh {
+            let refreshed = self
+                .client
+                .refresh_long_lived_token(&oauth_token.access_token)
+                .await
+                .map_err(|error| {
+                    log_sync_ig_error(&error);
+                    InstagramSyncError::Instagram(error)
+                })?;
 
-        let persisted_token = self
-            .upsert_oauth_token(
+            let expires_at = refreshed.expires_in.and_then(|seconds| {
+                i64::try_from(seconds)
+                    .ok()
+                    .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds))
+            });
+
+            self.upsert_oauth_token(
                 profile_id,
                 "instagram",
                 &refreshed.access_token,
@@ -179,11 +186,15 @@ impl InstagramService {
                 &oauth_token.provider_user_id,
                 &oauth_token.scopes,
             )
-            .await?;
+            .await?
+            .access_token
+        } else {
+            oauth_token.access_token.clone()
+        };
 
         let profile_stats = self
             .client
-            .fetch_profile_stats(&persisted_token.access_token)
+            .fetch_profile_stats(&effective_access_token)
             .await
             .map_err(|error| {
                 log_sync_ig_error(&error);
@@ -191,7 +202,7 @@ impl InstagramService {
             })?;
         let recent_media = self
             .client
-            .fetch_recent_media(&persisted_token.access_token, 25)
+            .fetch_recent_media(&effective_access_token, 25)
             .await
             .map_err(|error| {
                 log_sync_ig_error(&error);
@@ -267,8 +278,9 @@ mod tests {
     use super::*;
     use crate::config::InstagramConfig;
     use crate::instagram::client::IgClient;
-    use crate::instagram::repository::OAuthTokenRepository;
+    use crate::instagram::repository::{OAuthTokenRepository, OAuthTokenRepositoryTrait};
     use crate::schema::{profiles, users};
+    use chrono::Duration;
     use diesel::prelude::*;
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
     use wiremock::matchers::{method, path_regex, query_param};
@@ -475,6 +487,24 @@ mod tests {
         InstagramService::new(IgClient::new(cfg), OAuthTokenRepository::new(pool))
     }
 
+    fn make_db_service_with_profile_repository(
+        pool: deadpool_diesel::postgres::Pool,
+        mock_server: &MockServer,
+    ) -> InstagramService {
+        let base = mock_server.uri();
+        let cfg = InstagramConfig {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            redirect_uri: "http://localhost/callback".to_string(),
+            graph_api_version: "v25.0".to_string(),
+        };
+        InstagramService::new_with_profile_repository(
+            IgClient::new_with_base_urls(cfg, base.clone(), base.clone(), base),
+            OAuthTokenRepository::new(pool.clone()),
+            ProfileRepository::new(pool),
+        )
+    }
+
     #[tokio::test]
     async fn upsert_oauth_token_inserts_and_returns_token() {
         let (_container, pool) = setup_test_db().await;
@@ -547,6 +577,137 @@ mod tests {
         assert!(
             !deleted.unwrap(),
             "should return false when no token present"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_profile_skips_refresh_when_token_not_near_expiry() {
+        let mock_server = MockServer::start().await;
+        let (_container, pool) = setup_test_db().await;
+        let profile_id = create_test_profile(&pool).await;
+        let service = make_db_service_with_profile_repository(pool.clone(), &mock_server);
+        let oauth_repo = OAuthTokenRepository::new(pool);
+
+        service
+            .upsert_oauth_token(
+                profile_id,
+                "instagram",
+                "existing-token",
+                None,
+                Some(Utc::now() + Duration::days(30)),
+                "ig-user-1",
+                "instagram_business_basic",
+            )
+            .await
+            .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path_regex("/refresh_access_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"rotated-token","token_type":"bearer","expires_in":5183944}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("/v25.0/me$"))
+            .and(query_param("access_token", "existing-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"id":"17841400000000001","username":"creator_a","followers_count":321}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("/v25.0/me/media$"))
+            .and(query_param("access_token", "existing-token"))
+            .and(query_param("limit", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"data":[{"id":"m1","like_count":0,"comments_count":0,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let result = service.sync_profile(profile_id).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+
+        let token = oauth_repo
+            .find_by_profile_and_provider(profile_id, "instagram")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(token.access_token, "existing-token");
+    }
+
+    #[tokio::test]
+    async fn sync_profile_refreshes_and_persists_rotated_token_when_near_expiry() {
+        let mock_server = MockServer::start().await;
+        let (_container, pool) = setup_test_db().await;
+        let profile_id = create_test_profile(&pool).await;
+        let service = make_db_service_with_profile_repository(pool.clone(), &mock_server);
+        let oauth_repo = OAuthTokenRepository::new(pool);
+
+        service
+            .upsert_oauth_token(
+                profile_id,
+                "instagram",
+                "stale-token",
+                None,
+                Some(Utc::now() + Duration::days(3)),
+                "ig-user-1",
+                "instagram_business_basic",
+            )
+            .await
+            .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path_regex("/refresh_access_token"))
+            .and(query_param("grant_type", "ig_refresh_token"))
+            .and(query_param("access_token", "stale-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"access_token":"rotated-token","token_type":"bearer","expires_in":5183944}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("/v25.0/me$"))
+            .and(query_param("access_token", "rotated-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"id":"17841400000000001","username":"creator_b","followers_count":500}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("/v25.0/me/media$"))
+            .and(query_param("access_token", "rotated-token"))
+            .and(query_param("limit", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"data":[{"id":"m2","like_count":0,"comments_count":0,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let result = service.sync_profile(profile_id).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+
+        let token = oauth_repo
+            .find_by_profile_and_provider(profile_id, "instagram")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(token.access_token, "rotated-token");
+        assert!(token.expires_at.is_some());
+        assert!(
+            token.expires_at.unwrap() > Utc::now() + Duration::days(40),
+            "expected refreshed expiry to be in the future"
         );
     }
 }

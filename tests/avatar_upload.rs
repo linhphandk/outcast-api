@@ -79,9 +79,9 @@ struct MotoServer {
 impl MotoServer {
     /// Spawn `moto_server` on an available port and poll until it is ready.
     ///
-    /// Panics if `moto_server` cannot be started (not installed) or if it
+    /// Returns an error if `moto_server` cannot be started or if it
     /// fails to respond within 10 seconds.
-    async fn start() -> Self {
+    async fn start() -> Result<Self, std::io::Error> {
         // Pick a random port by binding to 0 then dropping it
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -91,8 +91,7 @@ impl MotoServer {
             .args(["-p", &port.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("Failed to start moto_server – is it installed? (`pip install moto[s3,server]`)");
+            .spawn()?;
 
         let endpoint = format!("http://127.0.0.1:{port}");
 
@@ -100,15 +99,29 @@ impl MotoServer {
         let client = reqwest::Client::new();
         for _ in 0..100 {
             if client.get(&endpoint).send().await.is_ok() {
-                return Self { child, endpoint };
+                return Ok(Self { child, endpoint });
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        panic!("moto_server did not become ready in time");
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "moto_server did not become ready in time",
+        ))
     }
 
     fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+}
+
+async fn start_moto_or_skip() -> Option<MotoServer> {
+    match MotoServer::start().await {
+        Ok(server) => Some(server),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("Skipping test: `moto_server` not found (`pip install moto[s3,server]`).");
+            None
+        }
+        Err(err) => panic!("Failed to start moto_server: {err}"),
     }
 }
 
@@ -291,7 +304,9 @@ fn build_multipart_body(
 
 #[tokio::test]
 async fn upload_avatar_happy_path() {
-    let moto = MotoServer::start().await;
+    let Some(moto) = start_moto_or_skip().await else {
+        return;
+    };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
     let (_container, pool) = setup_test_db().await;
@@ -345,7 +360,9 @@ async fn upload_avatar_happy_path() {
 
 #[tokio::test]
 async fn upload_avatar_invalid_mime_type_returns_400() {
-    let moto = MotoServer::start().await;
+    let Some(moto) = start_moto_or_skip().await else {
+        return;
+    };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
     let (_container, pool) = setup_test_db().await;
@@ -378,7 +395,9 @@ async fn upload_avatar_invalid_mime_type_returns_400() {
 
 #[tokio::test]
 async fn upload_avatar_oversized_file_returns_400() {
-    let moto = MotoServer::start().await;
+    let Some(moto) = start_moto_or_skip().await else {
+        return;
+    };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
     let (_container, pool) = setup_test_db().await;
