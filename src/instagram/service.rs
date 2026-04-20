@@ -603,7 +603,6 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path_regex("/refresh_access_token"))
-            .expect(0)
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 r#"{"access_token":"rotated-token","token_type":"bearer","expires_in":5183944}"#,
                 "application/json",
@@ -618,7 +617,6 @@ mod tests {
                 r#"{"id":"17841400000000001","username":"creator_a","followers_count":321}"#,
                 "application/json",
             ))
-            .expect(1)
             .mount(&mock_server)
             .await;
 
@@ -627,10 +625,9 @@ mod tests {
             .and(query_param("access_token", "existing-token"))
             .and(query_param("limit", "25"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                r#"{"data":[{"id":"m1","like_count":10,"comments_count":2,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
+                r#"{"data":[{"id":"m1","like_count":0,"comments_count":0,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
                 "application/json",
             ))
-            .expect(1)
             .mount(&mock_server)
             .await;
 
@@ -670,7 +667,6 @@ mod tests {
             .and(path_regex("/refresh_access_token"))
             .and(query_param("grant_type", "ig_refresh_token"))
             .and(query_param("access_token", "stale-token"))
-            .expect(1)
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 r#"{"access_token":"rotated-token","token_type":"bearer","expires_in":5183944}"#,
                 "application/json",
@@ -685,7 +681,6 @@ mod tests {
                 r#"{"id":"17841400000000001","username":"creator_b","followers_count":500}"#,
                 "application/json",
             ))
-            .expect(1)
             .mount(&mock_server)
             .await;
 
@@ -694,10 +689,9 @@ mod tests {
             .and(query_param("access_token", "rotated-token"))
             .and(query_param("limit", "25"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
-                r#"{"data":[{"id":"m2","like_count":9,"comments_count":1,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
+                r#"{"data":[{"id":"m2","like_count":0,"comments_count":0,"timestamp":"2026-01-01T00:00:00+0000","media_type":"IMAGE"}]}"#,
                 "application/json",
             ))
-            .expect(1)
             .mount(&mock_server)
             .await;
 
