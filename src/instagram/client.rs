@@ -276,7 +276,7 @@ impl IgClient {
 
     /// Fetch profile statistics for the authenticated Instagram user.
     ///
-    /// Calls `GET /{ver}/me?fields=user_id,username,name,account_type,
+    /// Calls `GET /{ver}/me?fields=id,username,name,account_type,
     /// profile_picture_url,followers_count,follows_count,media_count`
     /// on graph.instagram.com.
     #[tracing::instrument(skip(self, token), fields(profile_id))]
@@ -314,7 +314,7 @@ impl IgClient {
         url.query_pairs_mut()
             .append_pair(
                 "fields",
-                "user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count",
+                "id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count",
             )
             .append_pair("access_token", token);
         url
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(parsed.path(), "/v25.0/me");
         assert_eq!(
             query.get("fields"),
-            Some(&"user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count".to_string())
+            Some(&"id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count".to_string())
         );
         assert_eq!(query.get("access_token"), Some(&"my-token".to_string()));
     }
