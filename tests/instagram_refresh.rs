@@ -216,7 +216,7 @@ fn mount_instagram_refresh_success_mocks<'a>(
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": refreshed_token,
                 "token_type": "bearer",
-                "expires_in": 5183944
+                "expires_in": 3600
             })))
             .mount(mock_server)
             .await;
