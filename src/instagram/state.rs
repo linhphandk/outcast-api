@@ -1,11 +1,22 @@
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use chrono::{Duration, Utc};
+use cookie::time::Duration as CookieDuration;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const OAUTH_STATE_COOKIE_NAME: &str = "ig_oauth_state";
 const OAUTH_STATE_TTL_SECS: i64 = 10 * 60;
+
+fn build_state_cookie(value: &str, max_age_secs: i64) -> Cookie<'static> {
+    Cookie::build((OAUTH_STATE_COOKIE_NAME, value.to_owned()))
+        .path("/oauth/instagram")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(!cfg!(debug_assertions))
+        .max_age(CookieDuration::seconds(max_age_secs))
+        .build()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StateClaims {
@@ -46,15 +57,13 @@ pub fn issue_state_cookie(user_id: Uuid, jwt_secret: &[u8]) -> (String, Cookie<'
     )
     .expect("state token encoding should not fail");
 
-    let cookie = Cookie::build((OAUTH_STATE_COOKIE_NAME, token))
-        .path("/oauth/instagram")
-        .http_only(true)
-        .same_site(SameSite::Lax)
-        .secure(!cfg!(debug_assertions))
-        .max_age(cookie::time::Duration::seconds(OAUTH_STATE_TTL_SECS))
-        .build();
+    let cookie = build_state_cookie(&token, OAUTH_STATE_TTL_SECS);
 
     (state, cookie)
+}
+
+pub fn clear_state_cookie() -> Cookie<'static> {
+    build_state_cookie("", 0)
 }
 
 pub fn verify_state_cookie(

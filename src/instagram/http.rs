@@ -6,10 +6,8 @@ use axum::{
     response::{IntoResponse, Redirect},
     routing::{get, post},
 };
-use axum_extra::extract::cookie::{Cookie, SameSite};
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
-use cookie::time::Duration as CookieDuration;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{error, info, instrument, warn};
@@ -18,7 +16,7 @@ use crate::instagram::{
     error::IgError,
     service::InstagramService,
     service::InstagramSyncError,
-    state::{OAUTH_STATE_COOKIE_NAME, issue_state_cookie, verify_state_cookie},
+    state::{OAUTH_STATE_COOKIE_NAME, clear_state_cookie, issue_state_cookie, verify_state_cookie},
 };
 use crate::user::http::auth_extractor::AuthUser;
 use crate::user::repository::profile_repository::{
@@ -36,17 +34,6 @@ pub struct InstagramCallbackQuery {
     error: Option<String>,
     error_reason: Option<String>,
     error_description: Option<String>,
-}
-
-fn clear_oauth_state_cookie(jar: CookieJar) -> CookieJar {
-    let cookie = Cookie::build((OAUTH_STATE_COOKIE_NAME, ""))
-        .path("/oauth/instagram")
-        .http_only(true)
-        .same_site(SameSite::Lax)
-        .secure(!cfg!(debug_assertions))
-        .max_age(CookieDuration::seconds(0))
-        .build();
-    jar.add(cookie)
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -139,12 +126,12 @@ pub async fn instagram_callback(
     };
 
     if let Some(error_code) = query.error.as_deref() {
-        let jar = clear_oauth_state_cookie(jar);
+        let jar = jar.add(clear_state_cookie());
         warn!(
             user_id = %user_id,
             error = error_code,
-            error_reason = query.error_reason.as_deref().unwrap_or_default(),
-            error_description = query.error_description.as_deref().unwrap_or_default(),
+            error_reason = query.error_reason.as_deref().unwrap_or("(none)"),
+            error_description = query.error_description.as_deref().unwrap_or("(none)"),
             "Instagram OAuth callback denied by user"
         );
         return (jar, Redirect::to(DASHBOARD_REDIRECT_DENIED_PATH)).into_response();
