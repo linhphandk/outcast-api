@@ -11,6 +11,8 @@ struct SharedTestDb {
 
 pub struct TestDbSession {
     pub pool: deadpool_diesel::postgres::Pool,
+    /// Keeps the global test DB mutex locked for the whole test body.
+    /// Dropping this session releases the lock.
     _guard: MutexGuard<'static, ()>,
 }
 
@@ -45,6 +47,7 @@ async fn init_test_db() -> SharedTestDb {
 async fn reset_test_db(pool: &deadpool_diesel::postgres::Pool) {
     let conn = pool.get().await.unwrap();
     conn.interact(|conn| {
+        // Keep this list aligned with application tables when new tables are added.
         diesel::sql_query(
             "TRUNCATE TABLE oauth_tokens, social_handles, rates, profiles, sessions, users RESTART IDENTITY CASCADE",
         )
