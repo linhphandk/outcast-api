@@ -358,6 +358,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exchange_code_success_parses_data_wrapped_shape() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path_regex("/oauth/access_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"data":[{"access_token":"short-token","user_id":"17841400000000001","permissions":"instagram_business_basic"}]}"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let service = make_service(&mock_server);
+        let result = service.exchange_code("auth-code-123").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let token = result.unwrap();
+        assert_eq!(token.access_token, "short-token");
+        assert_eq!(token.user_id, "17841400000000001");
+        assert_eq!(token.permissions, "instagram_business_basic");
+    }
+
+    #[tokio::test]
     async fn exchange_code_api_error_returns_err() {
         let mock_server = MockServer::start().await;
 

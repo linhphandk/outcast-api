@@ -39,23 +39,67 @@ pub struct CodeExchange {
 /// Short-lived token returned by `POST /oauth/access_token` on the
 /// Instagram API with Instagram Login flow.
 ///
-/// The response body is `{"access_token":"…","user_id":…}`.  `user_id`
-/// is numeric but we keep it as a string for consistency with the rest
-/// of the codebase.
+/// Meta docs for `POST /oauth/access_token` currently show
+/// `{"data":[{"access_token":"…","user_id":"…","permissions":"…"}]}`,
+/// while earlier observed responses used the flat
+/// `{"access_token":"…","user_id":…}` shape.
 ///
-/// The `permissions` field is **not** present in the current Instagram
-/// API response (as of 2025).  It defaults to an empty string when
-/// absent; callers that need a scope value should fall back to
+/// To avoid deserialization regressions if Meta serves either variant,
+/// this type accepts both forms and unwraps `data[0]` when present.
+///
+/// The `permissions` field often remains absent; it defaults to an empty
+/// string and callers that need a scope value should fall back to
 /// [`SCOPE_IG_BUSINESS_BASIC`].
-#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShortLivedToken {
     pub access_token: String,
-    #[serde(deserialize_with = "deserialize_user_id")]
     pub user_id: String,
-    /// Granted permissions, if returned by the API.  Typically empty —
-    /// the API does not echo permissions in the token response.
-    #[serde(default)]
+    /// Granted permissions, if returned by the API.
     pub permissions: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+struct ShortLivedTokenFlat {
+    access_token: String,
+    #[serde(deserialize_with = "deserialize_user_id")]
+    user_id: String,
+    #[serde(default)]
+    permissions: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum ShortLivedTokenRepr {
+    Flat(ShortLivedTokenFlat),
+    Wrapped { data: Vec<ShortLivedTokenFlat> },
+}
+
+impl From<ShortLivedTokenFlat> for ShortLivedToken {
+    fn from(value: ShortLivedTokenFlat) -> Self {
+        Self {
+            access_token: value.access_token,
+            user_id: value.user_id,
+            permissions: value.permissions,
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ShortLivedToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        match ShortLivedTokenRepr::deserialize(deserializer)? {
+            ShortLivedTokenRepr::Flat(token) => Ok(token.into()),
+            ShortLivedTokenRepr::Wrapped { data } => data
+                .into_iter()
+                .next()
+                .map(Into::into)
+                .ok_or_else(|| de::Error::custom("expected non-empty data array")),
+        }
+    }
 }
 
 /// Deserialize `user_id` from either a JSON number or a JSON string.
@@ -503,6 +547,15 @@ mod tests {
         let raw = r#"{"access_token":"tok","user_id":"12345"}"#;
         let parsed: ShortLivedToken = serde_json::from_str(raw).expect("should parse");
         assert_eq!(parsed.user_id, "12345");
+    }
+
+    #[test]
+    fn short_lived_token_parses_data_wrapped_shape() {
+        let raw = r#"{"data":[{"access_token":"tok","user_id":"12345","permissions":"instagram_business_basic"}]}"#;
+        let parsed: ShortLivedToken = serde_json::from_str(raw).expect("should parse");
+        assert_eq!(parsed.access_token, "tok");
+        assert_eq!(parsed.user_id, "12345");
+        assert_eq!(parsed.permissions, "instagram_business_basic");
     }
 
     #[test]
