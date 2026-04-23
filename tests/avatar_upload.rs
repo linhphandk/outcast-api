@@ -6,7 +6,6 @@ use axum::{
     http::{Request, StatusCode},
     routing::{get, post},
 };
-use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use http_body_util::BodyExt;
 use outcast_api::{
     session::{
@@ -25,7 +24,8 @@ use outcast_api::{
 };
 use tower::ServiceExt;
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+mod common;
+
 
 const TEST_PEPPER: &str = "test_pepper";
 const TEST_JWT_SECRET: &str = "test_jwt_secret";
@@ -170,39 +170,6 @@ async fn build_s3_adapter(moto_endpoint: &str) -> S3Adapter {
 }
 
 // ---------------------------------------------------------------------------
-// DB setup (same pattern as existing tests)
-// ---------------------------------------------------------------------------
-
-/// Spin up a testcontainers Postgres instance, run Diesel migrations, and
-/// return both the container handle (to keep it alive) and the connection pool.
-async fn setup_test_db() -> (
-    testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
-    deadpool_diesel::postgres::Pool,
-) {
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::postgres::Postgres;
-
-    let container = Postgres::default().start().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let conn_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-
-    let manager =
-        deadpool_diesel::postgres::Manager::new(conn_string, deadpool_diesel::Runtime::Tokio1);
-    let pool = deadpool_diesel::postgres::Pool::builder(manager)
-        .build()
-        .unwrap();
-
-    let conn = pool.get().await.unwrap();
-    conn.interact(|conn| conn.run_pending_migrations(MIGRATIONS).map(|_| ()))
-        .await
-        .unwrap()
-        .unwrap();
-
-    (container, pool)
-}
-
-// ---------------------------------------------------------------------------
 // App builder
 // ---------------------------------------------------------------------------
 
@@ -309,7 +276,8 @@ async fn upload_avatar_happy_path() {
     };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
 
     // 1. Create a user and get a token
     let (token, user_id) = create_test_user(pool.clone(), storage.clone()).await;
@@ -365,7 +333,8 @@ async fn upload_avatar_invalid_mime_type_returns_400() {
     };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
 
     let (token, _user_id) = create_test_user(pool.clone(), storage.clone()).await;
 
@@ -400,7 +369,8 @@ async fn upload_avatar_oversized_file_returns_400() {
     };
     let s3_adapter = build_s3_adapter(moto.endpoint()).await;
     let storage: Arc<dyn StoragePort> = Arc::new(s3_adapter);
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
 
     let (token, _user_id) = create_test_user(pool.clone(), storage.clone()).await;
 
