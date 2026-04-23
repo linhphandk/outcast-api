@@ -4,7 +4,6 @@ use axum::{Router, body::Body, http::Request};
 use chrono::Utc;
 use bigdecimal::BigDecimal;
 use diesel::prelude::*;
-use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use http_body_util::BodyExt;
 use outcast_api::{
     config::InstagramConfig,
@@ -33,7 +32,8 @@ use wiremock::{
     matchers::{method, path, query_param},
 };
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+mod common;
+
 const TEST_PEPPER: &str = "test_pepper";
 const TEST_JWT_SECRET: &str = "test_jwt_secret";
 
@@ -81,30 +81,6 @@ impl axum::extract::FromRef<TestState> for String {
     fn from_ref(state: &TestState) -> Self {
         state.jwt_secret.clone()
     }
-}
-
-async fn setup_test_db() -> (
-    testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
-    deadpool_diesel::postgres::Pool,
-) {
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::postgres::Postgres;
-
-    let container = Postgres::default().start().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let conn_string = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-
-    let manager = deadpool_diesel::postgres::Manager::new(conn_string, deadpool_diesel::Runtime::Tokio1);
-    let pool = deadpool_diesel::postgres::Pool::builder(manager).build().unwrap();
-
-    let conn = pool.get().await.unwrap();
-    conn.interact(|conn| conn.run_pending_migrations(MIGRATIONS).map(|_| ()))
-        .await
-        .unwrap()
-        .unwrap();
-
-    (container, pool)
 }
 
 fn build_app(pool: deadpool_diesel::postgres::Pool, mock_server: &MockServer) -> Router {
@@ -179,7 +155,8 @@ async fn oauth_token_count(pool: &deadpool_diesel::postgres::Pool, profile_id: u
 
 #[tokio::test]
 async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
     let mock_server = MockServer::start().await;
     let app = build_app(pool.clone(), &mock_server);
     let created = create_user(&app, "ig_oauth_flow@example.com").await;
@@ -293,7 +270,8 @@ async fn instagram_oauth_authorize_callback_and_disconnect_flow() {
 
 #[tokio::test]
 async fn instagram_oauth_callback_user_denied_redirects_to_dashboard_with_denied_status() {
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
     let mock_server = MockServer::start().await;
     let app = build_app(pool.clone(), &mock_server);
     let created = create_user(&app, "ig_oauth_denied@example.com").await;
@@ -381,7 +359,8 @@ async fn instagram_oauth_callback_user_denied_redirects_to_dashboard_with_denied
 
 #[tokio::test]
 async fn instagram_refresh_within_cooldown_returns_429_with_retry_after() {
-    let (_container, pool) = setup_test_db().await;
+    let test_db = common::acquire_test_db().await;
+    let pool = test_db.pool.clone();
     let mock_server = MockServer::start().await;
     let app = build_app(pool.clone(), &mock_server);
     let created = create_user(&app, "ig_refresh_cooldown@example.com").await;
