@@ -72,8 +72,12 @@ pub(crate) async fn parse_response<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use super::TikTokClient;
+    use super::{TikTokClient, parse_response};
     use crate::config::TikTokConfig;
+    use crate::tiktok::error::TikTokError;
+    use serde::Deserialize;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_config() -> TikTokConfig {
         TikTokConfig {
@@ -103,5 +107,105 @@ mod tests {
         cfg.api_base_url = "not a url".to_string();
 
         let _ = TikTokClient::new(&cfg);
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct Probe {
+        hello: String,
+    }
+
+    async fn get(server: &MockServer) -> reqwest::Response {
+        reqwest::get(format!("{}/probe", server.uri())).await.unwrap()
+    }
+
+    async fn mount(server: &MockServer, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path("/probe"))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn parse_200_ok_deserializes_body() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            ResponseTemplate::new(200).set_body_string(r#"{"hello":"world"}"#),
+        )
+        .await;
+
+        let probe: Probe = parse_response(get(&server).await).await.unwrap();
+        assert_eq!(probe, Probe { hello: "world".into() });
+    }
+
+    #[tokio::test]
+    async fn parse_401_maps_to_unauthorized() {
+        let server = MockServer::start().await;
+        mount(&server, ResponseTemplate::new(401)).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        assert!(matches!(err, TikTokError::Unauthorized));
+    }
+
+    #[tokio::test]
+    async fn parse_429_maps_to_rate_limited() {
+        let server = MockServer::start().await;
+        mount(&server, ResponseTemplate::new(429)).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        assert!(matches!(err, TikTokError::RateLimited));
+    }
+
+    #[tokio::test]
+    async fn parse_500_with_envelope_maps_to_api() {
+        let server = MockServer::start().await;
+        let body = r#"{"error":{"code":"internal_error","message":"boom","log_id":"abc"}}"#;
+        mount(&server, ResponseTemplate::new(500).set_body_string(body)).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        match err {
+            TikTokError::Api { code, message, log_id } => {
+                assert_eq!(code, "internal_error");
+                assert_eq!(message, "boom");
+                assert_eq!(log_id, "abc");
+            }
+            other => panic!("expected Api, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_500_with_garbage_body_fallback() {
+        let server = MockServer::start().await;
+        let body = "x".repeat(1000);
+        mount(&server, ResponseTemplate::new(500).set_body_string(body)).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        match err {
+            TikTokError::Http { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(body.chars().count(), 256);
+            }
+            other => panic!("expected Http fallback, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_4xx_with_access_token_invalid_maps_to_unauthorized() {
+        let server = MockServer::start().await;
+        let body = r#"{"error":{"code":"access_token_invalid","message":"bad","log_id":"x"}}"#;
+        mount(&server, ResponseTemplate::new(400).set_body_string(body)).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        assert!(matches!(err, TikTokError::Unauthorized));
+    }
+
+    #[tokio::test]
+    async fn parse_200_invalid_json_maps_to_parse() {
+        let server = MockServer::start().await;
+        mount(&server, ResponseTemplate::new(200).set_body_string("not json")).await;
+
+        let err = parse_response::<Probe>(get(&server).await).await.unwrap_err();
+        assert!(matches!(err, TikTokError::Parse(_)));
     }
 }
